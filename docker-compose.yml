@@ -16,7 +16,9 @@ services:
       retries: 5
       start_period: 10s
   container-1:
-    build: .
+    build:
+      context: ./
+      dockerfile: client.Dockerfile
     container_name: container-1
     depends_on:
       rabbitmq:
@@ -28,8 +30,11 @@ services:
       - RABBITMQ_QUEUE_NAME=t-queue-1
       - RABBITMQ_ROUTING_KEY=kappa.penis
       - SYNC_DIRECTORY=/app
+      - SYNC_SERVER_URL=file-server:8080
   container-2:
-    build: .
+    build:
+      context: ./
+      dockerfile: client.Dockerfile
     container_name: container-2
     depends_on:
       rabbitmq:
@@ -41,5 +46,16 @@ services:
       - RABBITMQ_QUEUE_NAME=t-queue-2
       - RABBITMQ_ROUTING_KEY=kappa.penis
       - SYNC_DIRECTORY=/app
+      - SYNC_SERVER_URL=file-server:8080
+  file-server:
+    build:
+      context: ./
+      dockerfile: server.Dockerfile
+    container_name: file-server
+    ports:
+      - "8080:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 volumes:
   rabbitmq-data:

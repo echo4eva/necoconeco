@@ -5,6 +5,6 @@ RUN mkdir data
 
 COPY go.mod go.sum pubsub.go ./
 RUN go mod download
-RUN go build -o ./necoconeco
+RUN go build -tags pubsub -o ./pubsub
 
-CMD [ "./necoconeco" ]
+CMD [ "./pubsub" ]
