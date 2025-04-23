@@ -45,6 +45,19 @@ type ProcessedFiles struct {
 	files map[string]FileStat
 }
 
+type EventData struct {
+	path      string
+	event     string
+	timestamp time.Time
+	message   *Message
+}
+
+type EventProcessor struct {
+	// mutex      sync.Mutex
+	// fileEvents map[string]EventData
+	fileEvents chan EventData
+}
+
 var (
 	clientID       string
 	exchangeName   string
@@ -54,6 +67,7 @@ var (
 	address        string
 	serverURL      string
 	processedFiles *ProcessedFiles
+	eventProcessor *EventProcessor
 )
 
 func main() {
@@ -70,6 +84,7 @@ func main() {
 	syncDirectory = os.Getenv("SYNC_DIRECTORY")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
 	processedFiles = NewProcessFiles()
+	eventProcessor = NewEventProcessor()
 
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
@@ -168,6 +183,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	eventProcessor.processEvents(publisher, watcher)
+
 	// Block subroutines until cancel
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -187,35 +204,16 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					return
 				}
 
+				path := event.Name
+				eventOperation := event.Op.String()
+
 				payload := Message{
 					ClientID: clientID,
-					Event:    event.Op.String(),
-					Path:     event.Name,
+					Event:    eventOperation,
+					Path:     path,
 				}
 
-				switch {
-				case event.Has(fsnotify.Create):
-					if strings.HasSuffix(event.Name, ".md") {
-						time.Sleep(100 * time.Millisecond)
-						if processedFiles.isProcessed(event.Name) {
-							log.Printf("File %s has already been processed for event %s", event.Name, event.Op.String())
-							continue
-						}
-						err := upload(&payload)
-						if err != nil {
-							log.Println(err)
-						}
-						publish(publisher, &payload)
-					} else if isDir(event.Name) {
-						watcher.Add(event.Name)
-						publish(publisher, &payload)
-					}
-				case event.Has(fsnotify.Write):
-					log.Println("modified file: ", event.Name)
-					publish(publisher, &payload)
-				default:
-					publish(publisher, &payload)
-				}
+				eventProcessor.putEvent(event.Name, event.Op.String(), &payload)
 
 				log.Println("event: ", event)
 
@@ -419,9 +417,51 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 	}()
 }
 
+func NewEventProcessor() *EventProcessor {
+	return &EventProcessor{
+		fileEvents: make(chan EventData, 100),
+	}
+}
+
+func (ep EventProcessor) putEvent(path string, event string, message *Message) {
+	ep.fileEvents <- EventData{
+		path:      path,
+		event:     event,
+		timestamp: time.Now(),
+		message:   message,
+	}
+}
+
+func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnotify.Watcher) {
+	go func() {
+		for eventData := range ep.fileEvents {
+			switch eventData.event {
+			case "CREATE":
+				if strings.HasSuffix(eventData.path, ".md") {
+					if processedFiles.isProcessed(eventData.path) {
+						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
+						continue
+					}
+					err := upload(eventData.message)
+					if err != nil {
+						log.Println(err)
+					}
+					publish(publisher, eventData.message)
+				} else if isDir(eventData.path) {
+					watcher.Add(eventData.path)
+					publish(publisher, eventData.message)
+				}
+			default:
+				log.Printf("Unexpected event occured: %s", eventData.event)
+			}
+		}
+	}()
+}
+
 func NewProcessFiles() *ProcessedFiles {
 	return &ProcessedFiles{
 		files: make(map[string]FileStat),
+		mutex: sync.Mutex{},
 	}
 }
 
