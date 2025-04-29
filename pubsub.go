@@ -45,6 +45,13 @@ type ProcessedFiles struct {
 	files map[string]FileStat
 }
 
+type WriteDebouncer struct {
+	mutex    sync.Mutex
+	files    map[string]EventData
+	timers   map[string]*time.Timer
+	duration time.Duration
+}
+
 type EventData struct {
 	path      string
 	event     string
@@ -68,6 +75,7 @@ var (
 	serverURL      string
 	processedFiles *ProcessedFiles
 	eventProcessor *EventProcessor
+	writeDebouncer *WriteDebouncer
 )
 
 func main() {
@@ -85,6 +93,7 @@ func main() {
 	serverURL = os.Getenv("SYNC_SERVER_URL")
 	processedFiles = NewProcessFiles()
 	eventProcessor = NewEventProcessor()
+	writeDebouncer = NewWriteDebouncer()
 
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
@@ -207,13 +216,18 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 				path := event.Name
 				eventOperation := event.Op.String()
 
-				payload := Message{
+				message := Message{
 					ClientID: clientID,
 					Event:    eventOperation,
 					Path:     path,
 				}
 
-				eventProcessor.putEvent(event.Name, event.Op.String(), &payload)
+				switch event.Op {
+				case fsnotify.Write:
+					writeDebouncer.putWrite(path, &message)
+				default:
+					eventProcessor.putEvent(path, eventOperation, &message)
+				}
 
 				log.Println("event: ", event)
 
@@ -334,6 +348,9 @@ func download(message Message) error {
 
 func publish(publisher *rmq.Publisher, message *Message) {
 	message.Path = relativeConvert(message.Path)
+	if strings.Contains(message.Path, "\\") {
+		message.Path = uncursing(message.Path)
+	}
 
 	jsonData, err := json.Marshal(message)
 	if err != nil {
@@ -372,14 +389,18 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 					return
 				}
 				if err != nil {
-					rmq.Info("[CONSUMER] Failed to receive message", err)
+					rmq.Info("[CONSUMER] Failed tto receive message", err)
 					continue
 				}
 
 				var message Message
 				json.Unmarshal(deliveryContext.Message().GetData(), &message)
+				if strings.Contains(message.Path, "/") && strings.Contains(syncDirectory, "\\") {
+					message.Path = cursing(message.Path)
+				}
 
 				// For testing with docker containers
+				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
 				if strings.Contains(message.FileURL, "localhost") && !strings.Contains(serverURL, "localhost") {
 					message.FileURL = fmt.Sprintf("http://%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
 				}
@@ -496,10 +517,82 @@ func isDir(directory string) bool {
 	return false
 }
 
+func NewWriteDebouncer() *WriteDebouncer {
+	return &WriteDebouncer{
+		mutex:    sync.Mutex{},
+		files:    make(map[string]EventData),
+		timers:   make(map[string]*time.Timer),
+		duration: time.Second * 10,
+	}
+}
+
+func (wd WriteDebouncer) putWrite(path string, message *Message) {
+	wd.mutex.Lock()
+	defer wd.mutex.Unlock()
+
+	if _, exists := wd.timers[path]; !exists {
+		// Timer that has a callback function when duration elapsed
+		newTimer := time.AfterFunc(wd.duration, func() {
+
+			wd.mutex.Lock()
+
+			finalEvent, okEvent := wd.files[path]
+			_, okTimer := wd.timers[path]
+
+			if okEvent && okTimer {
+				delete(wd.files, path)
+				delete(wd.timers, path)
+
+				wd.mutex.Unlock()
+
+				eventProcessor.putEvent(finalEvent.path, finalEvent.event, finalEvent.message)
+			} else {
+				wd.mutex.Unlock()
+				log.Printf("[DEBUG] Debounce fired for %s but state removed", path)
+			}
+		})
+		wd.timers[path] = newTimer
+	} else {
+		wd.timers[path].Reset(wd.duration)
+	}
+
+	wd.files[path] = EventData{
+		path:      path,
+		event:     "WRITE",
+		timestamp: time.Now(),
+		message:   message,
+	}
+}
+
+func (wd WriteDebouncer) deleteWrite(path string) {
+	wd.mutex.Lock()
+	defer wd.mutex.Unlock()
+
+	if timer, ok := wd.timers[path]; ok {
+		timer.Stop()
+		delete(wd.timers, path)
+		log.Printf("[DEBUG] Timer deleted for %s", path)
+	}
+
+	delete(wd.files, path)
+}
+
 func relativeConvert(absolutePath string) string {
 	return strings.TrimPrefix(absolutePath, syncDirectory)
 }
 
 func absoluteConvert(relativePath string) string {
 	return syncDirectory + relativePath
+}
+
+func uncursing(windowsPath string) string {
+	linuxPath := strings.ReplaceAll(windowsPath, "\\", "/")
+
+	return linuxPath
+}
+
+func cursing(linuxPath string) string {
+	windowsPath := strings.ReplaceAll(linuxPath, "/", "\\")
+
+	return windowsPath
 }
