@@ -36,13 +36,20 @@ type Message struct {
 }
 
 type FileStat struct {
-	event      string
-	fromSource bool
+	event        string
+	fromSource   bool
+	isWriteReady bool
 }
 
 type ProcessedFiles struct {
 	mutex sync.Mutex
 	files map[string]FileStat
+}
+
+type IgnoreEvents struct {
+	mutex    sync.Mutex
+	timers   map[string]*time.Timer
+	duration time.Duration
 }
 
 type WriteDebouncer struct {
@@ -76,6 +83,7 @@ var (
 	processedFiles *ProcessedFiles
 	eventProcessor *EventProcessor
 	writeDebouncer *WriteDebouncer
+	ignoreEvents   *IgnoreEvents
 )
 
 func main() {
@@ -94,6 +102,7 @@ func main() {
 	processedFiles = NewProcessFiles()
 	eventProcessor = NewEventProcessor()
 	writeDebouncer = NewWriteDebouncer()
+	ignoreEvents = NewIgnoreEvents()
 
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
@@ -224,6 +233,14 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 
 				switch event.Op {
 				case fsnotify.Write:
+					if strings.HasSuffix(path, "workspace.json") {
+						continue
+					}
+					if ignoreEvents.isIgnored(path) {
+						log.Printf("[WATCH]-[IGNORE EVENTS] Detected faux-write, ignoring\n")
+						continue
+					}
+					log.Printf("[WATCH] Putting in write debouncer\n")
 					writeDebouncer.putWrite(path, &message)
 				default:
 					eventProcessor.putEvent(path, eventOperation, &message)
@@ -242,7 +259,8 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 }
 
 func upload(message *Message) error {
-	processedFiles.mark(message.Path, message.Event, true)
+	processedFiles.mark(message.Path, message.Event, true, true)
+	log.Printf("[UPLOAD] Marking true")
 
 	file, err := os.Open(message.Path)
 	if err != nil {
@@ -320,8 +338,11 @@ func upload(message *Message) error {
 }
 
 func download(message Message) error {
+	// Download has ABSOLUTE PATH REMEMBER THIS
 	absolutePath := absoluteConvert(message.Path)
-	processedFiles.mark(absolutePath, message.Event, false)
+	processedFiles.mark(absolutePath, message.Event, false, false)
+	ignoreEvents.putIgnore(absolutePath)
+	log.Printf("[DOWNLOAD] Marked false")
 
 	// Create file
 	out, err := os.Create(absolutePath)
@@ -329,6 +350,7 @@ func download(message Message) error {
 		return err
 	}
 	defer out.Close()
+	log.Printf("[DOWNLOAD] Created file")
 
 	// Use link to download
 	resp, err := http.Get(message.FileURL)
@@ -342,6 +364,7 @@ func download(message Message) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("[DOWNLOAD] File populated")
 
 	return nil
 }
@@ -403,6 +426,8 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
 				if strings.Contains(message.FileURL, "localhost") && !strings.Contains(serverURL, "localhost") {
 					message.FileURL = fmt.Sprintf("http://%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
+				} else if strings.Contains(message.FileURL, "file-server") && strings.Contains(serverURL, "localhost") {
+					message.FileURL = fmt.Sprintf("http://%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
 				}
 
 				if message.ClientID == clientID {
@@ -425,11 +450,21 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 					continue
 				}
 
-				if message.Event == "CREATE" && strings.HasSuffix(message.Path, ".md") {
-					rmq.Info("[CONSUMER] DOWNLOADING YAY")
+				switch message.Event {
+				case "CREATE":
+					if strings.HasSuffix(message.Path, ".md") {
+						rmq.Info("[CONSUMER] CREATE DOWNLOADING")
+						err := download(message)
+						if err != nil {
+							rmq.Error("[CONSUMER] Failed to download create", err)
+							continue
+						}
+					}
+				case "WRITE":
+					rmq.Info("[CONSUMER] WRITE DOWNLOADING")
 					err := download(message)
 					if err != nil {
-						rmq.Error("[CONSUMER] Failed to download", err)
+						rmq.Error("[CONSUMER] Failed to download write", err)
 						continue
 					}
 				}
@@ -472,6 +507,20 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					watcher.Add(eventData.path)
 					publish(publisher, eventData.message)
 				}
+			case "WRITE":
+				if strings.HasSuffix(eventData.path, ".md") {
+					if !ignoreEvents.isIgnored(eventData.path) {
+						log.Printf("[EVENT PROCESSOR] -WRITE- is write ready and uploading\n")
+						err := upload(eventData.message)
+						if err != nil {
+							log.Println(err)
+						}
+						log.Printf("[EVENT PROCESSOR] -WRITE- publishing\n")
+						publish(publisher, eventData.message)
+					} else {
+						log.Printf("[EVENT PROCESSOR]-[IGNORE EVENTS] -WRITE- is still being ignored")
+					}
+				}
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)
 			}
@@ -486,15 +535,19 @@ func NewProcessFiles() *ProcessedFiles {
 	}
 }
 
-func (pf *ProcessedFiles) mark(path, event string, fromSource bool) {
-	log.Printf("Marking file as processed: %s (event: %s)", path, event)
+func (pf *ProcessedFiles) mark(path, event string, fromSource bool, isWriteReady bool) {
+	log.Printf("Marking file as processed: %s (event: %s) (isWriteReady: %s)", path, event, isWriteReady)
 	pf.mutex.Lock()
-	defer pf.mutex.Unlock()
 
 	pf.files[path] = FileStat{
-		event:      event,
-		fromSource: fromSource,
+		event:        event,
+		fromSource:   fromSource,
+		isWriteReady: isWriteReady,
 	}
+
+	pf.mutex.Unlock()
+
+	pf.debugStatus(path)
 }
 
 func (pf *ProcessedFiles) isProcessed(path string) bool {
@@ -505,9 +558,17 @@ func (pf *ProcessedFiles) isProcessed(path string) bool {
 	return exists
 }
 
+func (pf *ProcessedFiles) isWriteReady(path string) bool {
+	pf.mutex.Lock()
+	defer pf.mutex.Unlock()
+
+	stat, _ := pf.files[path]
+	return stat.isWriteReady
+}
+
 func (pf ProcessedFiles) debugStatus(path string) {
 	file := pf.files[path]
-	fmt.Printf("[%s] %s : %t\n", path, file.event, file.fromSource)
+	fmt.Printf("[%s] %s : %t : %t \n", path, file.event, file.fromSource, file.isWriteReady)
 }
 
 func isDir(directory string) bool {
@@ -533,7 +594,6 @@ func (wd WriteDebouncer) putWrite(path string, message *Message) {
 	if _, exists := wd.timers[path]; !exists {
 		// Timer that has a callback function when duration elapsed
 		newTimer := time.AfterFunc(wd.duration, func() {
-
 			wd.mutex.Lock()
 
 			finalEvent, okEvent := wd.files[path]
@@ -545,10 +605,11 @@ func (wd WriteDebouncer) putWrite(path string, message *Message) {
 
 				wd.mutex.Unlock()
 
+				log.Printf("[WRITE DEBOUNCER] Putting in event processor\n")
 				eventProcessor.putEvent(finalEvent.path, finalEvent.event, finalEvent.message)
 			} else {
 				wd.mutex.Unlock()
-				log.Printf("[DEBUG] Debounce fired for %s but state removed", path)
+				log.Printf("[WRITE DEBOUNCER] Debounce fired for %s but state removed", path)
 			}
 		})
 		wd.timers[path] = newTimer
@@ -575,6 +636,40 @@ func (wd WriteDebouncer) deleteWrite(path string) {
 	}
 
 	delete(wd.files, path)
+}
+
+func NewIgnoreEvents() *IgnoreEvents {
+	return &IgnoreEvents{
+		mutex:    sync.Mutex{},
+		timers:   make(map[string]*time.Timer),
+		duration: time.Duration(time.Second * 5),
+	}
+}
+
+func (ie IgnoreEvents) isIgnored(path string) bool {
+	ie.mutex.Lock()
+	defer ie.mutex.Unlock()
+
+	_, exists := ie.timers[path]
+	log.Printf("[IGNORE EVENTS] - %s is '%t' that it exists", path, exists)
+	return exists
+}
+
+func (ie IgnoreEvents) putIgnore(path string) {
+	ie.mutex.Lock()
+	defer ie.mutex.Unlock()
+
+	if _, exists := ie.timers[path]; !exists {
+		log.Printf("[IGNORE EVENTS] - Putting Ignore on %s\n", path)
+		newTimer := time.AfterFunc(ie.duration, func() {
+			ie.mutex.Lock()
+			defer ie.mutex.Unlock()
+
+			log.Printf("[IGNORE EVENTS] - Remove Ignore %s\n", path)
+			delete(ie.timers, path)
+		})
+		ie.timers[path] = newTimer
+	}
 }
 
 func relativeConvert(absolutePath string) string {
