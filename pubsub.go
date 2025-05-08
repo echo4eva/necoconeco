@@ -224,11 +224,12 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 
 				path := event.Name
 				eventOperation := event.Op.String()
+				eventString := event.String()
 
 				message := Message{
 					ClientID: clientID,
-					Event:    eventOperation,
-					Path:     path,
+					Event:    event.Op.String(),
+					Path:     event.Name,
 				}
 
 				switch event.Op {
@@ -242,11 +243,21 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					}
 					log.Printf("[WATCH] Putting in write debouncer\n")
 					writeDebouncer.putWrite(path, &message)
+				case fsnotify.Create:
+					// if Create event was prompted from Rename event
+					if hasOldPath(eventString) {
+						log.Printf("[WATCH] -CREATE- has old path %s\n", eventString)
+
+						renameEvent := "NECO_RENAME"
+						message.Event = renameEvent
+
+						eventProcessor.putEvent(path, eventOperation, &message)
+					}
 				default:
 					eventProcessor.putEvent(path, eventOperation, &message)
 				}
 
-				log.Println("event: ", event)
+				log.Printf("%s\n", eventString)
 
 			case err, ok := <-watcher.Errors:
 				if !ok {
@@ -521,6 +532,12 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 						log.Printf("[EVENT PROCESSOR]-[IGNORE EVENTS] -WRITE- is still being ignored")
 					}
 				}
+			case "RENAME":
+				log.Printf("[EVENT PROCESSOR] -RENAME- processed")
+				processedFiles.mark(eventData.path, eventData.event, true, false)
+			case "NECO_RENAME":
+				log.Printf("[EVENT PROCESSOR] -NECO_RENAME- processed")
+				publish(publisher, eventData.message)
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)
 			}
@@ -548,6 +565,14 @@ func (pf *ProcessedFiles) mark(path, event string, fromSource bool, isWriteReady
 	pf.mutex.Unlock()
 
 	pf.debugStatus(path)
+}
+
+func (pf *ProcessedFiles) isRenamed(path string) bool {
+	pf.mutex.Lock()
+	defer pf.mutex.Unlock()
+
+	stat, _ := pf.files[path]
+	return stat.event == "RENAME"
 }
 
 func (pf *ProcessedFiles) isProcessed(path string) bool {
@@ -670,6 +695,18 @@ func (ie IgnoreEvents) putIgnore(path string) {
 		})
 		ie.timers[path] = newTimer
 	}
+}
+
+func hasOldPath(eventString string) bool {
+	return strings.Contains(eventString, "←")
+}
+
+func getOldPath(eventString string) string {
+	_, oldHalf, _ := strings.Cut(eventString, "←")
+	firstQuote := strings.Index(oldHalf, "\"")
+	lastQuote := strings.LastIndex(oldHalf, "\"")
+
+	return oldHalf[firstQuote+1 : lastQuote]
 }
 
 func relativeConvert(absolutePath string) string {
