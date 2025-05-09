@@ -33,6 +33,7 @@ type Message struct {
 	Event    string `json:"event"`
 	Path     string `json:"path"`
 	FileURL  string `json:"file_url"`
+	OldPath  string `json:"old_path"`
 }
 
 type FileStat struct {
@@ -232,13 +233,14 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					Path:     event.Name,
 				}
 
+				if ignoreEvents.isIgnored(path) {
+					log.Printf("[WATCH]-[IGNORE EVENTS] Detected ignored, %s, for %s\n", path, eventOperation)
+					continue
+				}
+
 				switch event.Op {
 				case fsnotify.Write:
 					if strings.HasSuffix(path, "workspace.json") {
-						continue
-					}
-					if ignoreEvents.isIgnored(path) {
-						log.Printf("[WATCH]-[IGNORE EVENTS] Detected faux-write, ignoring\n")
 						continue
 					}
 					log.Printf("[WATCH] Putting in write debouncer\n")
@@ -247,12 +249,13 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					// if Create event was prompted from Rename event
 					if hasOldPath(eventString) {
 						log.Printf("[WATCH] -CREATE- has old path %s\n", eventString)
+						oldPath := getOldPath(eventString)
 
 						renameEvent := "NECO_RENAME"
 						message.Event = renameEvent
-
-						eventProcessor.putEvent(path, eventOperation, &message)
+						message.OldPath = oldPath
 					}
+					eventProcessor.putEvent(path, eventOperation, &message)
 				default:
 					eventProcessor.putEvent(path, eventOperation, &message)
 				}
@@ -380,8 +383,20 @@ func download(message Message) error {
 	return nil
 }
 
+func rename(oldPath, newPath string) error {
+
+	log.Printf("[RENAME] OLD: %s NEW: %s", oldPath, newPath)
+
+	err := os.Rename(oldPath, newPath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func publish(publisher *rmq.Publisher, message *Message) {
 	message.Path = relativeConvert(message.Path)
+	message.OldPath = relativeConvert(message.OldPath)
 	if strings.Contains(message.Path, "\\") {
 		message.Path = uncursing(message.Path)
 	}
@@ -477,6 +492,17 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 					if err != nil {
 						rmq.Error("[CONSUMER] Failed to download write", err)
 						continue
+					}
+				case "NECO_RENAME":
+					absoluteOldPath := absoluteConvert(message.OldPath)
+					absoluteNewPath := absoluteConvert(message.Path)
+
+					rmq.Info("[CONSUMER] -NECO_RENAME-")
+					ignoreEvents.putIgnore(absoluteOldPath)
+					ignoreEvents.putIgnore(absoluteNewPath)
+					err := rename(absoluteOldPath, absoluteNewPath)
+					if err != nil {
+						rmq.Error("[CONSUMER] -NECO_REMAKE- ", err)
 					}
 				}
 			}
