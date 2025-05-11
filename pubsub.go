@@ -36,6 +36,10 @@ type Message struct {
 	OldPath  string `json:"old_path"`
 }
 
+type CreateDirectoryRequest struct {
+	Directory string `json:"directory"`
+}
+
 type FileStat struct {
 	event        string
 	fromSource   bool
@@ -288,7 +292,7 @@ func upload(message *Message) error {
 	fields := map[string]string{
 		"client_id": message.ClientID,
 		"event":     message.Event,
-		"path":      message.Path,
+		"path":      relativeConvert(message.Path),
 	}
 	for field, value := range fields {
 		err = multiWriter.WriteField(field, value)
@@ -335,7 +339,7 @@ func upload(message *Message) error {
 	fmt.Printf("Upload successful: %s\n", string(responseBody))
 
 	type UploadResponse struct {
-		Status  string `json:"status"`
+		Status  int    `json:"status"`
 		FileURL string `json:"file_url"`
 	}
 
@@ -379,6 +383,42 @@ func download(message Message) error {
 		return err
 	}
 	log.Printf("[DOWNLOAD] File populated")
+
+	return nil
+}
+
+func remoteCreateDirectory(directory string) error {
+	createDirectoryURL := fmt.Sprintf("http://%s/directory", serverURL)
+
+	payload := CreateDirectoryRequest{
+		Directory: relativeConvert(directory),
+	}
+
+	// log.Printf("[REMOTE CREATE DIRECTORY] directory: %s payload.Directory: %s", directory, payload.Directory)
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal data: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+
+	req, err := http.NewRequest(http.MethodPost, createDirectoryURL, bodyReader)
+	if err != nil {
+		return fmt.Errorf("Failed to create put request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body: %w", err)
+	}
+	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
 
 	return nil
 }
@@ -485,6 +525,14 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 							rmq.Error("[CONSUMER] Failed to download create", err)
 							continue
 						}
+					} else {
+						absolutePath := absoluteConvert(message.Path)
+						rmq.Info("[CONSUMER] CREATING DIRECTORY %s", message.Path)
+						ignoreEvents.putIgnore(absolutePath)
+						err := createDirectory(absolutePath)
+						if err != nil {
+							log.Println(err)
+						}
 					}
 				case "WRITE":
 					rmq.Info("[CONSUMER] WRITE DOWNLOADING")
@@ -542,6 +590,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					publish(publisher, eventData.message)
 				} else if isDir(eventData.path) {
 					watcher.Add(eventData.path)
+					remoteCreateDirectory(eventData.message.Path)
 					publish(publisher, eventData.message)
 				}
 			case "WRITE":
@@ -721,6 +770,14 @@ func (ie IgnoreEvents) putIgnore(path string) {
 		})
 		ie.timers[path] = newTimer
 	}
+}
+
+func createDirectory(directory string) error {
+	err := os.MkdirAll(directory, 755)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func hasOldPath(eventString string) bool {
