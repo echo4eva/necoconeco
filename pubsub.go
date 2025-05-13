@@ -172,8 +172,6 @@ func main() {
 	consumerContext, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
 
-	consume(consumer, consumerContext)
-
 	// Setup filesystem watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -181,6 +179,7 @@ func main() {
 	}
 	defer watcher.Close()
 
+	consume(consumer, consumerContext, watcher)
 	watch(watcher, publisher)
 
 	// Print working directory for debugging
@@ -463,7 +462,7 @@ func publish(publisher *rmq.Publisher, message *Message) {
 	}
 }
 
-func consume(consumer *rmq.Consumer, ctx context.Context) {
+func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watcher) {
 	go func() {
 		for {
 			select {
@@ -525,6 +524,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 							rmq.Error("[CONSUMER] Failed to download create", err)
 							continue
 						}
+						// Consuming directory create events
 					} else {
 						absolutePath := absoluteConvert(message.Path)
 						rmq.Info("[CONSUMER] CREATING DIRECTORY %s", message.Path)
@@ -533,6 +533,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context) {
 						if err != nil {
 							log.Println(err)
 						}
+						watcher.Add(absolutePath)
 					}
 				case "WRITE":
 					rmq.Info("[CONSUMER] WRITE DOWNLOADING")
