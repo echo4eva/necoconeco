@@ -40,6 +40,11 @@ type CreateDirectoryRequest struct {
 	Directory string `json:"directory"`
 }
 
+type RenameRequest struct {
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
 type FileStat struct {
 	event        string
 	fromSource   bool
@@ -255,8 +260,11 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 						oldPath := getOldPath(eventString)
 
 						renameEvent := "NECO_RENAME"
+
 						message.Event = renameEvent
 						message.OldPath = oldPath
+
+						eventOperation = renameEvent
 					}
 					eventProcessor.putEvent(path, eventOperation, &message)
 				default:
@@ -422,6 +430,41 @@ func remoteCreateDirectory(directory string) error {
 	return nil
 }
 
+func remoteRename(oldName, newName string) error {
+	renameURL := fmt.Sprintf("http://%s/rename", serverURL)
+
+	payload := RenameRequest{
+		OldName: relativeConvert(oldName),
+		NewName: relativeConvert(newName),
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal data: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+
+	req, err := http.NewRequest(http.MethodPost, renameURL, bodyReader)
+	if err != nil {
+		return fmt.Errorf("Failed to create put request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body: %w", err)
+	}
+	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
+
+	return nil
+}
+
 func rename(oldPath, newPath string) error {
 
 	log.Printf("[RENAME] OLD: %s NEW: %s", oldPath, newPath)
@@ -527,7 +570,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 						// Consuming directory create events
 					} else {
 						absolutePath := absoluteConvert(message.Path)
-						rmq.Info("[CONSUMER] CREATING DIRECTORY %s", message.Path)
+						rmq.Info("[CONSUMER] CREATING DIRECTORY", message.Path)
 						ignoreEvents.putIgnore(absolutePath)
 						err := createDirectory(absolutePath)
 						if err != nil {
@@ -552,6 +595,9 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					err := rename(absoluteOldPath, absoluteNewPath)
 					if err != nil {
 						rmq.Error("[CONSUMER] -NECO_REMAKE- ", err)
+					}
+					if isDir(absoluteOldPath) {
+						watcher.Add(absoluteNewPath)
 					}
 				}
 			}
@@ -613,6 +659,13 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				processedFiles.mark(eventData.path, eventData.event, true, false)
 			case "NECO_RENAME":
 				log.Printf("[EVENT PROCESSOR] -NECO_RENAME- processed")
+				if isDir(eventData.path) {
+					watcher.Add(eventData.path)
+				}
+				err := remoteRename(eventData.message.OldPath, eventData.message.Path)
+				if err != nil {
+					log.Println(err)
+				}
 				publish(publisher, eventData.message)
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)

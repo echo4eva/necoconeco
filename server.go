@@ -22,6 +22,11 @@ type CreateDirectoryRequest struct {
 	Directory string `json:"directory"`
 }
 
+type RenameRequest struct {
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
 type Response struct {
 	Status int `json:"status"`
 }
@@ -36,6 +41,7 @@ func main() {
 
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/directory", directoryHandler)
+	http.HandleFunc("/rename", renameHandler)
 
 	fmt.Println("Server started at :8080")
 	err := http.ListenAndServe("0.0.0.0:8080", nil)
@@ -105,6 +111,35 @@ func directoryHandler(w http.ResponseWriter, r *http.Request) {
 		err = os.MkdirAll(absoluteConvert(relativeDirectory), 755)
 		if err != nil {
 			http.Error(w, "Error creating direcgtory", http.StatusInternalServerError)
+			return
+		}
+
+		response := Response{
+			http.StatusOK,
+		}
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func renameHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var reqPayload RenameRequest
+
+		err := json.NewDecoder(r.Body).Decode(&reqPayload)
+		if err != nil {
+			http.Error(w, "Error decoding json", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		oldName := reqPayload.OldName
+		newName := reqPayload.NewName
+		log.Printf("[RENAME HANDLER] Old: %s New: %s\n", oldName, newName)
+
+		err = os.Rename(absoluteConvert(oldName), absoluteConvert(newName))
+		if err != nil {
+			http.Error(w, "Error renaming", http.StatusInternalServerError)
 			return
 		}
 
