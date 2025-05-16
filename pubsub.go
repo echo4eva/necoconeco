@@ -45,6 +45,10 @@ type RenameRequest struct {
 	NewName string `json:"new_name"`
 }
 
+type RemoveRequest struct {
+	Path string `json:"path"`
+}
+
 type FileStat struct {
 	event        string
 	fromSource   bool
@@ -284,7 +288,6 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 }
 
 func upload(message *Message) error {
-	processedFiles.mark(message.Path, message.Event, true, true)
 	log.Printf("[UPLOAD] Marking true")
 
 	file, err := os.Open(message.Path)
@@ -358,14 +361,15 @@ func upload(message *Message) error {
 	}
 
 	message.FileURL = uploadResponse.FileURL
-
 	return nil
 }
 
 func download(message Message) error {
 	// Download has ABSOLUTE PATH REMEMBER THIS
 	absolutePath := absoluteConvert(message.Path)
-	processedFiles.mark(absolutePath, message.Event, false, false)
+	// Works for create events but not for consuming write evensts
+	// processedFiles.mark(absolutePath, message.Event, false, false)
+	// defer processedFiles.unmark(absolutePath)
 	ignoreEvents.putIgnore(absolutePath)
 	log.Printf("[DOWNLOAD] Marked false")
 
@@ -412,7 +416,7 @@ func remoteCreateDirectory(directory string) error {
 
 	req, err := http.NewRequest(http.MethodPost, createDirectoryURL, bodyReader)
 	if err != nil {
-		return fmt.Errorf("Failed to create put request: %w", err)
+		return fmt.Errorf("Failed to create post request: %w", err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
@@ -447,7 +451,41 @@ func remoteRename(oldName, newName string) error {
 
 	req, err := http.NewRequest(http.MethodPost, renameURL, bodyReader)
 	if err != nil {
-		return fmt.Errorf("Failed to create put request: %w", err)
+		return fmt.Errorf("Failed to create post request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body: %w", err)
+	}
+	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
+
+	return nil
+}
+
+func remoteRemove(targetPath string) error {
+	removeURL := fmt.Sprintf("http://%s/remove", serverURL)
+
+	payload := RemoveRequest{
+		Path: targetPath,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal data: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+
+	req, err := http.NewRequest(http.MethodPost, removeURL, bodyReader)
+	if err != nil {
+		return fmt.Errorf("Failed to create post request: %w", err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
@@ -466,10 +504,21 @@ func remoteRename(oldName, newName string) error {
 }
 
 func rename(oldPath, newPath string) error {
-
+	// Doesn't work, watcher go routine is too slow to catch os operation events
+	// processedFiles.mark(oldPath, "NECO_RENAME", false, false)
+	// defer processedFiles.unmark(oldPath)
+	// processedFiles.mark(newPath, "NECO_RENAME", false, false)
+	// defer processedFiles.unmark(newPath)
 	log.Printf("[RENAME] OLD: %s NEW: %s", oldPath, newPath)
-
 	err := os.Rename(oldPath, newPath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func remove(targetPath string) error {
+	err := os.RemoveAll(targetPath)
 	if err != nil {
 		return err
 	}
@@ -599,6 +648,14 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					if isDir(absoluteOldPath) {
 						watcher.Add(absoluteNewPath)
 					}
+				case "REMOVE":
+					rmq.Info("[CONSUMER] -REMOVE-")
+					absolutePath := absoluteConvert(message.Path)
+					ignoreEvents.putIgnore(absolutePath)
+					err := remove(absolutePath)
+					if err != nil {
+						rmq.Error("[CONSUMER] -REMOVE- Failed to remove", err)
+					}
 				}
 			}
 		}
@@ -638,6 +695,10 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				} else if isDir(eventData.path) {
 					watcher.Add(eventData.path)
 					remoteCreateDirectory(eventData.message.Path)
+					if processedFiles.isProcessed(eventData.path) {
+						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
+						continue
+					}
 					publish(publisher, eventData.message)
 				}
 			case "WRITE":
@@ -655,8 +716,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					}
 				}
 			case "RENAME":
-				log.Printf("[EVENT PROCESSOR] -RENAME- processed")
-				processedFiles.mark(eventData.path, eventData.event, true, false)
+				log.Printf("[EVENT PROCESSOR] -RENAME- processed, debug")
 			case "NECO_RENAME":
 				log.Printf("[EVENT PROCESSOR] -NECO_RENAME- processed")
 				if isDir(eventData.path) {
@@ -666,6 +726,14 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if err != nil {
 					log.Println(err)
 				}
+				publish(publisher, eventData.message)
+			case "REMOVE":
+				if processedFiles.isProcessed(eventData.path) {
+					log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
+					continue
+				}
+				log.Printf("[EVENT PROCESSOR] -REMOVE- removing")
+				remove(eventData.path)
 				publish(publisher, eventData.message)
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)
@@ -694,6 +762,14 @@ func (pf *ProcessedFiles) mark(path, event string, fromSource bool, isWriteReady
 	pf.mutex.Unlock()
 
 	pf.debugStatus(path)
+}
+
+func (pf *ProcessedFiles) unmark(path string) {
+	log.Printf("[PROCESSED FILES] UNMARKING: %s", path)
+	pf.mutex.Lock()
+	defer pf.mutex.Unlock()
+
+	delete(pf.files, path)
 }
 
 func (pf *ProcessedFiles) isRenamed(path string) bool {
@@ -796,7 +872,7 @@ func NewIgnoreEvents() *IgnoreEvents {
 	return &IgnoreEvents{
 		mutex:    sync.Mutex{},
 		timers:   make(map[string]*time.Timer),
-		duration: time.Duration(time.Second * 5),
+		duration: time.Duration(time.Second * 1),
 	}
 }
 
@@ -805,7 +881,6 @@ func (ie IgnoreEvents) isIgnored(path string) bool {
 	defer ie.mutex.Unlock()
 
 	_, exists := ie.timers[path]
-	log.Printf("[IGNORE EVENTS] - %s is '%t' that it exists", path, exists)
 	return exists
 }
 
@@ -827,6 +902,13 @@ func (ie IgnoreEvents) putIgnore(path string) {
 }
 
 func createDirectory(directory string) error {
+	log.Printf("[CREATE DIRECTORY] %s", directory)
+
+	// Doesn't work? Create event is delayed on Mkdir
+	// so event not caught in between mark/unmark
+	// processedFiles.mark(directory, "CREATE", true, false)
+	// defer processedFiles.unmark(directory)
+
 	err := os.MkdirAll(directory, 755)
 	if err != nil {
 		return err

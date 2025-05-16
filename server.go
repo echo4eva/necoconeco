@@ -27,6 +27,10 @@ type RenameRequest struct {
 	NewName string `json:"new_name"`
 }
 
+type RemoveRequest struct {
+	Path string `json:"path"`
+}
+
 type Response struct {
 	Status int `json:"status"`
 }
@@ -42,6 +46,7 @@ func main() {
 	http.HandleFunc("/upload", uploadHandler)
 	http.HandleFunc("/directory", directoryHandler)
 	http.HandleFunc("/rename", renameHandler)
+	http.HandleFunc("/remove", removeHandler)
 
 	fmt.Println("Server started at :8080")
 	err := http.ListenAndServe("0.0.0.0:8080", nil)
@@ -140,6 +145,34 @@ func renameHandler(w http.ResponseWriter, r *http.Request) {
 		err = os.Rename(absoluteConvert(oldName), absoluteConvert(newName))
 		if err != nil {
 			http.Error(w, "Error renaming", http.StatusInternalServerError)
+			return
+		}
+
+		response := Response{
+			http.StatusOK,
+		}
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func removeHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var reqPayload RemoveRequest
+
+		err := json.NewDecoder(r.Body).Decode(&reqPayload)
+		if err != nil {
+			http.Error(w, "Error decoding json", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		path := reqPayload.Path
+		log.Printf("[REMOVE HANDLER] To remove: %s\n", path)
+
+		err = os.RemoveAll(absoluteConvert(path))
+		if err != nil {
+			http.Error(w, "Error removing", http.StatusInternalServerError)
 			return
 		}
 
