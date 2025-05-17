@@ -271,6 +271,14 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 						eventOperation = renameEvent
 					}
 					eventProcessor.putEvent(path, eventOperation, &message)
+				case fsnotify.Rename:
+					if writeDebouncer.writeExists(path) {
+						writeDebouncer.deleteWrite(path)
+					}
+				case fsnotify.Remove:
+					if writeDebouncer.writeExists(path) {
+						writeDebouncer.deleteWrite(path)
+					}
 				default:
 					eventProcessor.putEvent(path, eventOperation, &message)
 				}
@@ -855,7 +863,7 @@ func (wd WriteDebouncer) putWrite(path string, message *Message) {
 	}
 }
 
-func (wd WriteDebouncer) deleteWrite(path string) {
+func (wd *WriteDebouncer) deleteWrite(path string) {
 	wd.mutex.Lock()
 	defer wd.mutex.Unlock()
 
@@ -866,6 +874,16 @@ func (wd WriteDebouncer) deleteWrite(path string) {
 	}
 
 	delete(wd.files, path)
+}
+
+func (wd WriteDebouncer) writeExists(path string) bool {
+	wd.mutex.Lock()
+	defer wd.mutex.Unlock()
+
+	_, exists := wd.timers[path]
+
+	log.Printf("[WRITE DEBOUNCER] %s, %t", path, exists)
+	return exists
 }
 
 func NewIgnoreEvents() *IgnoreEvents {
