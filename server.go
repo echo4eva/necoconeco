@@ -4,50 +4,17 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/echo4eva/necoconeco/internal/utils"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/echo4eva/necoconeco/internal/api"
+	"github.com/echo4eva/necoconeco/internal/utils"
 )
-
-type MetadataResponse struct {
-	Response
-	Files map[string]utils.FileMetadata `json:"files"`
-}
-
-type UploadResponse struct {
-	Response
-	FileURL string `json:"file_url"`
-}
-
-type CreateDirectoryRequest struct {
-	Directory string `json:"directory"`
-}
-
-type RenameRequest struct {
-	OldName string `json:"old_name"`
-	NewName string `json:"new_name"`
-}
-
-type RemoveRequest struct {
-	Path string `json:"path"`
-}
-
-type Response struct {
-	Status int `json:"status"`
-}
-
-// type FileMetadata struct {
-// 	LastModified string `json:"last_modified"`
-// 	ContentHash  string `json:"content_hash"`
-// }
 
 var (
 	syncDirectory = "/app/storage"
@@ -105,8 +72,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	fileURL := fmt.Sprintf("http://%s/files%s", r.Host, relativePath)
 
 	w.Header().Set("Content-Type", "application/json")
-	response := UploadResponse{
-		Response: Response{
+	response := api.UploadResponse{
+		Response: api.Response{
 			http.StatusOK,
 		},
 		FileURL: fileURL,
@@ -117,7 +84,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 func directoryHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		var reqPayload CreateDirectoryRequest
+		var reqPayload api.CreateDirectoryRequest
 
 		err := json.NewDecoder(r.Body).Decode(&reqPayload)
 		if err != nil {
@@ -134,7 +101,7 @@ func directoryHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		response := Response{
+		response := api.Response{
 			http.StatusOK,
 		}
 		json.NewEncoder(w).Encode(response)
@@ -144,7 +111,7 @@ func directoryHandler(w http.ResponseWriter, r *http.Request) {
 func renameHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		var reqPayload RenameRequest
+		var reqPayload api.RenameRequest
 
 		err := json.NewDecoder(r.Body).Decode(&reqPayload)
 		if err != nil {
@@ -163,7 +130,7 @@ func renameHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		response := Response{
+		response := api.Response{
 			http.StatusOK,
 		}
 		json.NewEncoder(w).Encode(response)
@@ -173,7 +140,7 @@ func renameHandler(w http.ResponseWriter, r *http.Request) {
 func removeHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		var reqPayload RemoveRequest
+		var reqPayload api.RemoveRequest
 
 		err := json.NewDecoder(r.Body).Decode(&reqPayload)
 		if err != nil {
@@ -191,7 +158,7 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		response := Response{
+		response := api.Response{
 			http.StatusOK,
 		}
 		json.NewEncoder(w).Encode(response)
@@ -201,60 +168,28 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 func metadataHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		response := MetadataResponse{
-			Files:    make(map[string]utils.FileMetadata),
-			Response: Response{},
+		response := api.MetadataResponse{
+			DirectoryMetadata: &utils.DirectoryMetadata{},
+			Response:          api.Response{},
 		}
 
-		if _, err := os.Stat(syncDirectory); err != nil {
+		_, err := os.Stat(syncDirectory)
+		if err != nil {
 			http.Error(w, "Error sync directory not initialized", http.StatusInternalServerError)
 			return
 		}
 
-		err := filepath.WalkDir(syncDirectory, func(path string, d fs.DirEntry, err error) error {
-			fileInfo, err := d.Info()
-			if err != nil {
-				log.Printf("Error getting file info")
-				return err
-			}
-			lastModified := fileInfo.ModTime().String()
-			relativePath, err := filepath.Rel(syncDirectory, path)
-			if err != nil {
-				fmt.Printf("Error converting %s to relative path", path)
-				return err
-			}
-
-			// if its a file, access its contents
-			if !d.IsDir() {
-				fileContent, err := os.ReadFile(path)
-				if err != nil {
-					fmt.Printf("Error reading file %s", path)
-					return err
-				}
-				sum := sha256.Sum256(fileContent)
-				contentHash := hex.EncodeToString(sum[:])
-				response.Files[relativePath] = utils.FileMetadata{
-					LastModified: lastModified,
-					ContentHash:  contentHash,
-				}
-			} else {
-				if relativePath != "." {
-					response.Files[relativePath] = utils.FileMetadata{
-						LastModified: lastModified,
-					}
-				}
-			}
-			return nil
-		})
+		var localMetadata *utils.DirectoryMetadata
+		localMetadata, err = utils.GetLocalMetadata(syncDirectory)
 		if err != nil {
-			log.Fatal(err)
-			http.Error(w, "Error walking file server directory", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("%s", err), http.StatusInternalServerError)
 			return
 		}
+		response.DirectoryMetadata = localMetadata
+		response.Status = http.StatusOK
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		response.Status = http.StatusOK
 		json.NewEncoder(w).Encode(response)
 	}
 }

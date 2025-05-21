@@ -6,7 +6,7 @@ import (
 
 type MetadataResponse struct {
 	Response
-	Files map[string]utils.FileMetadata `json:"files"`
+	*utils.DirectoryMetadata
 }
 
 type UploadResponse struct {
