@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/echo4eva/necoconeco/internal/utils"
 	"io"
 	"io/fs"
 	"log"
@@ -18,7 +19,7 @@ import (
 
 type MetadataResponse struct {
 	Response
-	Files map[string]FileMetadata `json:"files"`
+	Files map[string]utils.FileMetadata `json:"files"`
 }
 
 type UploadResponse struct {
@@ -43,10 +44,10 @@ type Response struct {
 	Status int `json:"status"`
 }
 
-type FileMetadata struct {
-	LastModified string `json:"last_modified"`
-	ContentHash  string `json:"content_hash"`
-}
+// type FileMetadata struct {
+// 	LastModified string `json:"last_modified"`
+// 	ContentHash  string `json:"content_hash"`
+// }
 
 var (
 	syncDirectory = "/app/storage"
@@ -201,7 +202,7 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		response := MetadataResponse{
-			Files:    make(map[string]FileMetadata),
+			Files:    make(map[string]utils.FileMetadata),
 			Response: Response{},
 		}
 
@@ -232,13 +233,13 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				sum := sha256.Sum256(fileContent)
 				contentHash := hex.EncodeToString(sum[:])
-				response.Files[relativePath] = FileMetadata{
+				response.Files[relativePath] = utils.FileMetadata{
 					LastModified: lastModified,
 					ContentHash:  contentHash,
 				}
 			} else {
 				if relativePath != "." {
-					response.Files[relativePath] = FileMetadata{
+					response.Files[relativePath] = utils.FileMetadata{
 						LastModified: lastModified,
 					}
 				}
