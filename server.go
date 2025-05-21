@@ -4,14 +4,22 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 )
+
+type MetadataResponse struct {
+	Response
+	Files map[string]FileMetadata `json:"files"`
+}
 
 type UploadResponse struct {
 	Response
@@ -35,6 +43,11 @@ type Response struct {
 	Status int `json:"status"`
 }
 
+type FileMetadata struct {
+	LastModified string `json:"last_modified"`
+	ContentHash  string `json:"content_hash"`
+}
+
 var (
 	syncDirectory = "/app/storage"
 )
@@ -47,6 +60,7 @@ func main() {
 	http.HandleFunc("/directory", directoryHandler)
 	http.HandleFunc("/rename", renameHandler)
 	http.HandleFunc("/remove", removeHandler)
+	http.HandleFunc("/metadata", metadataHandler)
 
 	fmt.Println("Server started at :8080")
 	err := http.ListenAndServe("0.0.0.0:8080", nil)
@@ -179,6 +193,67 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 		response := Response{
 			http.StatusOK,
 		}
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func metadataHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		response := MetadataResponse{
+			Files:    make(map[string]FileMetadata),
+			Response: Response{},
+		}
+
+		if _, err := os.Stat(syncDirectory); err != nil {
+			http.Error(w, "Error sync directory not initialized", http.StatusInternalServerError)
+			return
+		}
+
+		err := filepath.WalkDir(syncDirectory, func(path string, d fs.DirEntry, err error) error {
+			fileInfo, err := d.Info()
+			if err != nil {
+				log.Printf("Error getting file info")
+				return err
+			}
+			lastModified := fileInfo.ModTime().String()
+			relativePath, err := filepath.Rel(syncDirectory, path)
+			if err != nil {
+				fmt.Printf("Error converting %s to relative path", path)
+				return err
+			}
+
+			// if its a file, access its contents
+			if !d.IsDir() {
+				fileContent, err := os.ReadFile(path)
+				if err != nil {
+					fmt.Printf("Error reading file %s", path)
+					return err
+				}
+				sum := sha256.Sum256(fileContent)
+				contentHash := hex.EncodeToString(sum[:])
+				response.Files[relativePath] = FileMetadata{
+					LastModified: lastModified,
+					ContentHash:  contentHash,
+				}
+			} else {
+				if relativePath != "." {
+					response.Files[relativePath] = FileMetadata{
+						LastModified: lastModified,
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			log.Fatal(err)
+			http.Error(w, "Error walking file server directory", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		response.Status = http.StatusOK
 		json.NewEncoder(w).Encode(response)
 	}
 }
