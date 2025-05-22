@@ -100,21 +100,26 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 		localFileMetadata, existsLocally := localMetadata.Files[path]
 		serverFileMetadata, existsOnServer := serverMetadata.Files[path]
 		absolutePath := utils.RelToAbsConvert(path, syncDirectory)
+		fmt.Printf("[%s] local exist: %t | server exist: %t\n", path, existsLocally, existsOnServer)
 		// File exists on both
 		// ----------- only on server
 		// ----------- only locally
 		if existsLocally && existsOnServer {
 			// If content hashes are different, download from file-server (source of truth)
 			if !utils.IsTrueHash(localFileMetadata.ContentHash, serverFileMetadata.ContentHash) {
+				fmt.Printf("[%s] hash dif detected, downloading locally\n", path)
 				api.Download(path, serverURL, syncDirectory)
 			}
 		} else if !existsLocally && existsOnServer {
 			if utils.IsDir(path) {
+				fmt.Printf("[%s] making directory locally\n", path)
 				utils.MkDir(absolutePath)
 			} else {
+				fmt.Printf("[%s] downloading file locally\n", path)
 				api.Download(path, serverURL, syncDirectory)
 			}
 		} else if existsLocally && !existsOnServer {
+			fmt.Printf("[%s] removing file/directory locally\n", path)
 			utils.Rm(absolutePath)
 		}
 	}

@@ -185,6 +185,7 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("%s", err), http.StatusInternalServerError)
 			return
 		}
+
 		response.DirectoryMetadata = localMetadata
 		response.Status = http.StatusOK
 

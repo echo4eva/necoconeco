@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
+	// "path/filepath"
 
 	"github.com/echo4eva/necoconeco/internal/utils"
 )
@@ -51,12 +51,14 @@ func Download(relativePath, serverURL, syncDirectory string) error {
 	defer out.Close()
 
 	// Download from file-server
-	downloadURL := fmt.Sprintf("http://%s/files%s", serverURL, relativePath)
+	downloadURL := fmt.Sprintf("http://%s/files/%s", serverURL, relativePath)
 	resp, err := http.Get(downloadURL)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	fmt.Printf("%s\n", downloadURL)
 
 	// Copy data into file
 	_, err = io.Copy(out, resp.Body)
