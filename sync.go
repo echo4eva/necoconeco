@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/echo4eva/necoconeco/internal/api"
+	"github.com/echo4eva/necoconeco/internal/utils"
 	"github.com/joho/godotenv"
 	// "github.com/echo4eva/necoconeco/internal/utils"
 )
@@ -32,15 +33,22 @@ func main() {
 	serverURL = os.Getenv("SYNC_SERVER_URL")
 	syncDirectory = os.Getenv("SYNC_DIRECTORY")
 
+	// Get file-server directory+file metadata
 	serverMetadata, err := downloadMetadata()
 	if err != nil {
-		log.Printf("[SYNC]-[FAILED] %s\n", err)
+		log.Printf("[SYNC]-[SERVER METADATA] %s\n", err)
 	}
 
-	fmt.Println(serverMetadata)
+	// Get local/client's directory+file metadata
+	localMetadata, err := utils.GetLocalMetadata(syncDirectory)
+	if err != nil {
+		log.Printf("[SYNC]-[LOCAL METADATA] %s\n")
+	}
+
+	processMetadata(localMetadata, serverMetadata)
 }
 
-func downloadMetadata() (*api.MetadataResponse, error) {
+func downloadMetadata() (*utils.DirectoryMetadata, error) {
 	downloadURL := fmt.Sprintf("http://%s/metadata", serverURL)
 
 	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
@@ -65,5 +73,49 @@ func downloadMetadata() (*api.MetadataResponse, error) {
 		return nil, fmt.Errorf("Failed to unmarshal server metadata", err)
 	}
 
-	return &serverMetadata, nil
+	var fileserverDirectoryMetadata *utils.DirectoryMetadata
+	fileserverDirectoryMetadata = serverMetadata.DirectoryMetadata
+
+	return fileserverDirectoryMetadata, nil
+}
+
+func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
+	// Accumulate all unique paths from both local and server metadata
+	allPathsSet := make(map[string]struct{})
+	for path := range localMetadata.Files {
+		allPathsSet[path] = struct{}{}
+	}
+	for path := range serverMetadata.Files {
+		allPathsSet[path] = struct{}{}
+	}
+
+	// Reallocate into paths into slice, just makes sense
+	allPaths := make([]string, 0, len(allPathsSet))
+	for path := range allPathsSet {
+		allPaths = append(allPaths, path)
+	}
+
+	// Compare local and server meta data
+	for _, path := range allPaths {
+		localFileMetadata, existsLocally := localMetadata.Files[path]
+		serverFileMetadata, existsOnServer := serverMetadata.Files[path]
+		absolutePath := utils.RelToAbsConvert(path, syncDirectory)
+		// File exists on both
+		// ----------- only on server
+		// ----------- only locally
+		if existsLocally && existsOnServer {
+			// If content hashes are different, download from file-server (source of truth)
+			if !utils.IsTrueHash(localFileMetadata.ContentHash, serverFileMetadata.ContentHash) {
+				api.Download(path, serverURL, syncDirectory)
+			}
+		} else if !existsLocally && existsOnServer {
+			if utils.IsDir(path) {
+				utils.MkDir(absolutePath)
+			} else {
+				api.Download(path, serverURL, syncDirectory)
+			}
+		} else if existsLocally && !existsOnServer {
+			utils.Rm(absolutePath)
+		}
+	}
 }

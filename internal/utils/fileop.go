@@ -31,11 +31,7 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 			return err
 		}
 		lastModified := fileInfo.ModTime().String()
-		relativePath, err := filepath.Rel(syncDirectory, path)
-		if err != nil {
-			fmt.Printf("Error converting %s to relative path", path)
-			return err
-		}
+		relativePath := AbsToRelConvert(syncDirectory, path)
 
 		// if its a file, access its contents
 		if !d.IsDir() {
@@ -64,4 +60,38 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 	}
 
 	return &directoryMetadata, nil
+}
+
+func IsTrueHash(localHash, trueHash string) bool {
+	return localHash == trueHash
+}
+
+func RelToAbsConvert(relativePath, syncDirectory string) string {
+	absolutePath := filepath.Join(syncDirectory, relativePath)
+	return absolutePath
+}
+
+func AbsToRelConvert(absolutePath, syncDirectory string) string {
+	relativePath, err := filepath.Rel(syncDirectory, absolutePath)
+	if err != nil {
+		log.Printf("There was an error with AbsToRelConvert somehow xD?")
+	}
+	return relativePath
+}
+
+func GetOnlyDir(fullPath string) string {
+	return filepath.Dir(fullPath)
+}
+
+func IsDir(directory string) bool {
+	stat, err := os.Stat(directory)
+	return (err == nil && stat.IsDir())
+}
+
+func MkDir(absolutePath string) {
+	os.MkdirAll(absolutePath, 755)
+}
+
+func Rm(absolutePath string) {
+	os.RemoveAll(absolutePath)
 }
