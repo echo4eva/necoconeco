@@ -56,6 +56,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	os.MkdirAll("./storage", os.ModePerm)
 
+	log.Printf("%s", relativePath)
+
 	dst, err := os.Create(filepath.Join("./storage/", relativePath))
 	if err != nil {
 		http.Error(w, "Error creating file", http.StatusInternalServerError)
@@ -69,7 +71,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileURL := fmt.Sprintf("http://%s/files%s", r.Host, relativePath)
+	fileURL := fmt.Sprintf("http://%s/files/%s", r.Host, relativePath)
 
 	w.Header().Set("Content-Type", "application/json")
 	response := api.UploadResponse{
@@ -95,7 +97,8 @@ func directoryHandler(w http.ResponseWriter, r *http.Request) {
 
 		relativeDirectory := reqPayload.Directory
 		log.Printf("[DIRECTORY HANDLER] %s\n", reqPayload.Directory)
-		err = os.MkdirAll(absoluteConvert(relativeDirectory), 755)
+		absolutePath := utils.RelToAbsConvert(syncDirectory, relativeDirectory)
+		err = os.MkdirAll(absolutePath, 755)
 		if err != nil {
 			http.Error(w, "Error creating direcgtory", http.StatusInternalServerError)
 			return

@@ -108,7 +108,7 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 			// If content hashes are different, download from file-server (source of truth)
 			if !utils.IsTrueHash(localFileMetadata.ContentHash, serverFileMetadata.ContentHash) {
 				fmt.Printf("[%s] hash dif detected, downloading locally\n", path)
-				api.Download(path, serverURL, syncDirectory)
+				api.Download(path, syncDirectory, serverURL)
 			}
 		} else if !existsLocally && existsOnServer {
 			if utils.IsDir(path) {
@@ -116,7 +116,7 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 				utils.MkDir(absolutePath)
 			} else {
 				fmt.Printf("[%s] downloading file locally\n", path)
-				api.Download(path, serverURL, syncDirectory)
+				api.Download(path, syncDirectory, serverURL)
 			}
 		} else if existsLocally && !existsOnServer {
 			fmt.Printf("[%s] removing file/directory locally\n", path)

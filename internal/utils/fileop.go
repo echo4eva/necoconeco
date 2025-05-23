@@ -69,13 +69,13 @@ func IsTrueHash(localHash, trueHash string) bool {
 	return localHash == trueHash
 }
 
-func RelToAbsConvert(relativePath, syncDirectory string) string {
+func RelToAbsConvert(syncDirectory, relativePath string) string {
 	absolutePath := filepath.Join(syncDirectory, relativePath)
 	return absolutePath
 }
 
-func AbsToRelConvert(absolutePath, syncDirectory string) string {
-	relativePath, err := filepath.Rel(absolutePath, syncDirectory)
+func AbsToRelConvert(syncDirectory, absolutePath string) string {
+	relativePath, err := filepath.Rel(syncDirectory, absolutePath)
 	if err != nil {
 		log.Printf("There was an error with AbsToRelConvert somehow xD?")
 	}
