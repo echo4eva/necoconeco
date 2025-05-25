@@ -4,16 +4,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
-	"mime/multipart"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -288,74 +284,17 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 func upload(message *Message) error {
 	log.Printf("[UPLOAD] Marking true")
 
-	file, err := os.Open(message.Path)
-	if err != nil {
-		return fmt.Errorf("Failed to open file %w", err)
-	}
-	defer file.Close()
-
-	var requestBody bytes.Buffer
-	multiWriter := multipart.NewWriter(&requestBody)
-
 	fields := map[string]string{
 		"client_id": message.ClientID,
 		"event":     message.Event,
 		"path":      utils.AbsToRelConvert(syncDirectory, message.Path),
 	}
-	for field, value := range fields {
-		err = multiWriter.WriteField(field, value)
-		if err != nil {
-			return fmt.Errorf("Failed to write field %s: %w", field, err)
-		}
-	}
 
-	fileWriter, err := multiWriter.CreateFormFile("file", filepath.Base(message.Path))
+	// Sending relative path, target file's path to upload, and serverURL to send req to
+	// `uploadResponse` comes unmarshalled already
+	uploadResponse, err := api.Upload(fields, message.Path, serverURL)
 	if err != nil {
-		return fmt.Errorf("Failed to create form file %w:", err)
-	}
-
-	_, err = io.Copy(fileWriter, file)
-	if err != nil {
-		return fmt.Errorf("Failed to copy file content %w", err)
-	}
-
-	err = multiWriter.Close()
-	if err != nil {
-		return fmt.Errorf("Failed to close multipart writer %w", err)
-	}
-
-	uploadURL := fmt.Sprintf("http://%s/upload", serverURL)
-	request, err := http.NewRequest("POST", uploadURL, &requestBody)
-	if err != nil {
-		return fmt.Errorf("Failed to create request %w", err)
-	}
-
-	request.Header.Set("Content-Type", multiWriter.FormDataContentType())
-
-	client := &http.Client{}
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("Failed to send request %w", err)
-	}
-	defer response.Body.Close()
-
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return fmt.Errorf("Failed to read response %w", err)
-	}
-
-	fmt.Printf("Upload successful: %s\n", string(responseBody))
-
-	type UploadResponse struct {
-		Status  int    `json:"status"`
-		FileURL string `json:"file_url"`
-	}
-
-	uploadResponse := UploadResponse{}
-
-	err = json.Unmarshal(responseBody, &uploadResponse)
-	if err != nil {
-		return fmt.Errorf("Failed to unmarshal response %w", err)
+		log.Printf("[UPLOAD] Error: %s\n", err)
 	}
 
 	message.FileURL = uploadResponse.FileURL
@@ -371,63 +310,12 @@ func download(message Message) error {
 	ignoreEvents.putIgnore(absolutePath)
 	log.Printf("[DOWNLOAD] Marked false")
 
-	// Create file
-	out, err := os.Create(absolutePath)
+	err := api.Download(message.Path, syncDirectory, serverURL)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	log.Printf("[DOWNLOAD] Created file")
 
-	// Use link to download
-	resp, err := http.Get(message.FileURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Copy data into file
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return err
-	}
 	log.Printf("[DOWNLOAD] File populated")
-
-	return nil
-}
-
-func remoteCreateDirectory(directory string) error {
-	createDirectoryURL := fmt.Sprintf("http://%s/directory", serverURL)
-
-	payload := api.CreateDirectoryRequest{
-		Directory: utils.AbsToRelConvert(syncDirectory, directory),
-	}
-
-	// log.Printf("[REMOTE CREATE DIRECTORY] directory: %s payload.Directory: %s", directory, payload.Directory)
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("Failed to marshal data: %w", err)
-	}
-
-	bodyReader := bytes.NewReader(jsonData)
-
-	req, err := http.NewRequest(http.MethodPost, createDirectoryURL, bodyReader)
-	if err != nil {
-		return fmt.Errorf("Failed to create post request: %w", err)
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("Failed to do request: %w", err)
-	}
-	defer res.Body.Close()
-
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return fmt.Errorf("Failed to read response body: %w", err)
-	}
-	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
 
 	return nil
 }
@@ -552,7 +440,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					if err != nil {
 						rmq.Error("[CONSUMER] -NECO_REMAKE- ", err)
 					}
-					if isDir(absoluteOldPath) {
+					if utils.IsDir(absoluteOldPath) {
 						watcher.Add(absoluteNewPath)
 					}
 				case "REMOVE":
@@ -599,9 +487,9 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 						log.Println(err)
 					}
 					publish(publisher, eventData.message)
-				} else if isDir(eventData.path) {
+				} else if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
-					remoteCreateDirectory(eventData.message.Path)
+					api.RemoteMkdir(eventData.message.Path, syncDirectory, serverURL)
 					if processedFiles.isProcessed(eventData.path) {
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
@@ -626,7 +514,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				log.Printf("[EVENT PROCESSOR] -RENAME- processed, debug")
 			case "NECO_RENAME":
 				log.Printf("[EVENT PROCESSOR] -NECO_RENAME- processed")
-				if isDir(eventData.path) {
+				if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
 				}
 				err := api.RemoteRename(eventData.message.OldPath, eventData.message.Path, syncDirectory, serverURL)
@@ -709,13 +597,6 @@ func (pf *ProcessedFiles) isWriteReady(path string) bool {
 func (pf ProcessedFiles) debugStatus(path string) {
 	file := pf.files[path]
 	fmt.Printf("[%s] %s : %t : %t \n", path, file.event, file.fromSource, file.isWriteReady)
-}
-
-func isDir(directory string) bool {
-	if stat, err := os.Stat(directory); err == nil && stat.IsDir() {
-		return true
-	}
-	return false
 }
 
 func NewWriteDebouncer() *WriteDebouncer {
@@ -821,10 +702,12 @@ func (ie IgnoreEvents) putIgnore(path string) {
 	}
 }
 
+// This is to detect the event of renaming in fsnotify event logs
 func hasOldPath(eventString string) bool {
 	return strings.Contains(eventString, "←")
 }
 
+// This is to extract the old name, since the old name is private
 func getOldPath(eventString string) string {
 	_, oldHalf, _ := strings.Cut(eventString, "←")
 	firstQuote := strings.Index(oldHalf, "\"")
@@ -833,6 +716,7 @@ func getOldPath(eventString string) string {
 	return oldHalf[firstQuote+1 : lastQuote]
 }
 
+// Windows shit, DONT TOUCH EWW WHAT TEH FUUUCK
 func uncursing(windowsPath string) string {
 	linuxPath := strings.ReplaceAll(windowsPath, "\\", "/")
 

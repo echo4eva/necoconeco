@@ -41,7 +41,10 @@ func main() {
 
 		// if its a file, access its contents
 		if !d.IsDir() {
-			_, err := api.Upload(path, syncDirectory, serverURL)
+			fields := map[string]string{
+				"path": relativePath,
+			}
+			_, err := api.Upload(fields, path, serverURL)
 			if err != nil {
 				fmt.Printf("Failed to upload %s", err)
 			}

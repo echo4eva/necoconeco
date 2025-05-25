@@ -48,7 +48,7 @@ type Response struct {
 }
 
 func Download(relativePath, syncDirectory, serverURL string) error {
-	absolutePath := utils.RelToAbsConvert(relativePath, syncDirectory)
+	absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
 
 	directory := utils.GetOnlyDir(absolutePath)
 	utils.MkDir(directory)
@@ -79,7 +79,7 @@ func Download(relativePath, syncDirectory, serverURL string) error {
 	return nil
 }
 
-func Upload(absolutePath, syncDirectory, serverURL string) (*UploadResponse, error) {
+func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadResponse, error) {
 	file, err := os.Open(absolutePath)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to open file %w", err)
@@ -89,9 +89,10 @@ func Upload(absolutePath, syncDirectory, serverURL string) (*UploadResponse, err
 	var requestBody bytes.Buffer
 	multiWriter := multipart.NewWriter(&requestBody)
 
-	fields := map[string]string{
-		"path": utils.AbsToRelConvert(syncDirectory, absolutePath),
-	}
+	// Possible fields could be:
+	// "path" - a relative path for others to consume
+	// "client_id" - for mq
+	// "event" - for mq
 	for field, value := range fields {
 		err = multiWriter.WriteField(field, value)
 		if err != nil {
