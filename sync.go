@@ -113,14 +113,20 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 		} else if !existsLocally && existsOnServer {
 			if utils.IsDir(path) {
 				fmt.Printf("[%s] making directory locally\n", path)
-				utils.MkDir(absolutePath)
+				err := utils.MkDir(absolutePath)
+				if err != nil {
+					fmt.Printf("[%s] [ERROR] %s\n", err)
+				}
 			} else {
 				fmt.Printf("[%s] downloading file locally\n", path)
 				api.Download(path, syncDirectory, serverURL)
 			}
 		} else if existsLocally && !existsOnServer {
 			fmt.Printf("[%s] removing file/directory locally\n", path)
-			utils.Rm(absolutePath)
+			err := utils.Rm(absolutePath)
+			if err != nil {
+				fmt.Printf("[%s] [ERROR] %s\n", err)
+			}
 		}
 	}
 }

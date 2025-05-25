@@ -183,3 +183,72 @@ func RemoteMkdir(directory, syncDirectory, serverURL string) error {
 
 	return nil
 }
+
+func RemoteRename(oldName, newName, syncDirectory, serverURL string) error {
+	renameURL := fmt.Sprintf("http://%s/rename", serverURL)
+
+	payload := RenameRequest{
+		OldName: utils.AbsToRelConvert(syncDirectory, oldName),
+		NewName: utils.AbsToRelConvert(syncDirectory, newName),
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal data: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+
+	req, err := http.NewRequest(http.MethodPost, renameURL, bodyReader)
+	if err != nil {
+		return fmt.Errorf("Failed to create post request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body: %w", err)
+	}
+	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
+
+	return nil
+}
+
+func RemoteRemove(targetPath, syncDirectory, serverURL string) error {
+	removeURL := fmt.Sprintf("http://%s/remove", serverURL)
+
+	payload := RemoveRequest{
+		Path: utils.AbsToRelConvert(syncDirectory, targetPath),
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Failed to marshal data: %w", err)
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+
+	req, err := http.NewRequest(http.MethodPost, removeURL, bodyReader)
+	if err != nil {
+		return fmt.Errorf("Failed to create post request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Failed to do request: %w", err)
+	}
+	defer res.Body.Close()
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return fmt.Errorf("Failed to read response body: %w", err)
+	}
+	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
+
+	return nil
+}

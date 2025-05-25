@@ -98,7 +98,7 @@ func directoryHandler(w http.ResponseWriter, r *http.Request) {
 		relativeDirectory := reqPayload.Directory
 		log.Printf("[DIRECTORY HANDLER] %s\n", reqPayload.Directory)
 		absolutePath := utils.RelToAbsConvert(syncDirectory, relativeDirectory)
-		err = os.MkdirAll(absolutePath, 755)
+		err = utils.MkDir(absolutePath)
 		if err != nil {
 			http.Error(w, "Error creating direcgtory", http.StatusInternalServerError)
 			return
@@ -125,11 +125,13 @@ func renameHandler(w http.ResponseWriter, r *http.Request) {
 
 		oldName := reqPayload.OldName
 		newName := reqPayload.NewName
+		absoluteOld := utils.RelToAbsConvert(syncDirectory, oldName)
+		absoluteNew := utils.RelToAbsConvert(syncDirectory, newName)
 		log.Printf("[RENAME HANDLER] Old: %s New: %s\n", oldName, newName)
 
-		err = os.Rename(absoluteConvert(oldName), absoluteConvert(newName))
+		err = os.Rename(absoluteOld, absoluteNew)
 		if err != nil {
-			http.Error(w, "Error renaming", http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Error renaming, old: %s | new: %s", absoluteOld, absoluteNew), http.StatusInternalServerError)
 			return
 		}
 
@@ -155,7 +157,8 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 		path := reqPayload.Path
 		log.Printf("[REMOVE HANDLER] To remove: %s\n", path)
 
-		err = os.RemoveAll(absoluteConvert(path))
+		absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+		err = os.RemoveAll(absolutePath)
 		if err != nil {
 			http.Error(w, "Error removing", http.StatusInternalServerError)
 			return
@@ -196,9 +199,4 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 	}
-}
-
-func absoluteConvert(relativePath string) string {
-	log.Printf("[FILE SERVER] relative path: %s\n", relativePath)
-	return syncDirectory + relativePath
 }

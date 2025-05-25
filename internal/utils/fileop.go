@@ -75,10 +75,7 @@ func RelToAbsConvert(syncDirectory, relativePath string) string {
 }
 
 func AbsToRelConvert(syncDirectory, absolutePath string) string {
-	relativePath, err := filepath.Rel(syncDirectory, absolutePath)
-	if err != nil {
-		log.Printf("There was an error with AbsToRelConvert somehow xD?")
-	}
+	relativePath, _ := filepath.Rel(syncDirectory, absolutePath)
 	return relativePath
 }
 
@@ -91,10 +88,26 @@ func IsDir(path string) bool {
 	return ext == ""
 }
 
-func MkDir(absolutePath string) {
-	os.MkdirAll(absolutePath, os.ModePerm)
+func MkDir(absolutePath string) error {
+	err := os.MkdirAll(absolutePath, os.ModePerm)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func Rm(absolutePath string) {
-	os.RemoveAll(absolutePath)
+func Rm(absolutePath string) error {
+	err := os.RemoveAll(absolutePath)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func Rename(oldPath, newPath string) error {
+	err := os.Rename(oldPath, newPath)
+	if err != nil {
+		return err
+	}
+	return nil
 }

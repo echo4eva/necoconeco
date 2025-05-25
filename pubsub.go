@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/Azure/go-amqp"
+	"github.com/echo4eva/necoconeco/internal/api"
+	"github.com/echo4eva/necoconeco/internal/utils"
 	"github.com/fsnotify/fsnotify"
 	"github.com/joho/godotenv"
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
@@ -34,19 +36,6 @@ type Message struct {
 	Path     string `json:"path"`
 	FileURL  string `json:"file_url"`
 	OldPath  string `json:"old_path"`
-}
-
-type CreateDirectoryRequest struct {
-	Directory string `json:"directory"`
-}
-
-type RenameRequest struct {
-	OldName string `json:"old_name"`
-	NewName string `json:"new_name"`
-}
-
-type RemoveRequest struct {
-	Path string `json:"path"`
 }
 
 type FileStat struct {
@@ -279,6 +268,7 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					if writeDebouncer.writeExists(path) {
 						writeDebouncer.deleteWrite(path)
 					}
+					eventProcessor.putEvent(path, eventOperation, &message)
 				default:
 					eventProcessor.putEvent(path, eventOperation, &message)
 				}
@@ -310,7 +300,7 @@ func upload(message *Message) error {
 	fields := map[string]string{
 		"client_id": message.ClientID,
 		"event":     message.Event,
-		"path":      relativeConvert(message.Path),
+		"path":      utils.AbsToRelConvert(syncDirectory, message.Path),
 	}
 	for field, value := range fields {
 		err = multiWriter.WriteField(field, value)
@@ -374,7 +364,7 @@ func upload(message *Message) error {
 
 func download(message Message) error {
 	// Download has ABSOLUTE PATH REMEMBER THIS
-	absolutePath := absoluteConvert(message.Path)
+	absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
 	// Works for create events but not for consuming write evensts
 	// processedFiles.mark(absolutePath, message.Event, false, false)
 	// defer processedFiles.unmark(absolutePath)
@@ -409,8 +399,8 @@ func download(message Message) error {
 func remoteCreateDirectory(directory string) error {
 	createDirectoryURL := fmt.Sprintf("http://%s/directory", serverURL)
 
-	payload := CreateDirectoryRequest{
-		Directory: relativeConvert(directory),
+	payload := api.CreateDirectoryRequest{
+		Directory: utils.AbsToRelConvert(syncDirectory, directory),
 	}
 
 	// log.Printf("[REMOTE CREATE DIRECTORY] directory: %s payload.Directory: %s", directory, payload.Directory)
@@ -442,100 +432,9 @@ func remoteCreateDirectory(directory string) error {
 	return nil
 }
 
-func remoteRename(oldName, newName string) error {
-	renameURL := fmt.Sprintf("http://%s/rename", serverURL)
-
-	payload := RenameRequest{
-		OldName: relativeConvert(oldName),
-		NewName: relativeConvert(newName),
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("Failed to marshal data: %w", err)
-	}
-
-	bodyReader := bytes.NewReader(jsonData)
-
-	req, err := http.NewRequest(http.MethodPost, renameURL, bodyReader)
-	if err != nil {
-		return fmt.Errorf("Failed to create post request: %w", err)
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("Failed to do request: %w", err)
-	}
-	defer res.Body.Close()
-
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return fmt.Errorf("Failed to read response body: %w", err)
-	}
-	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
-
-	return nil
-}
-
-func remoteRemove(targetPath string) error {
-	removeURL := fmt.Sprintf("http://%s/remove", serverURL)
-
-	payload := RemoveRequest{
-		Path: targetPath,
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("Failed to marshal data: %w", err)
-	}
-
-	bodyReader := bytes.NewReader(jsonData)
-
-	req, err := http.NewRequest(http.MethodPost, removeURL, bodyReader)
-	if err != nil {
-		return fmt.Errorf("Failed to create post request: %w", err)
-	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("Failed to do request: %w", err)
-	}
-	defer res.Body.Close()
-
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		return fmt.Errorf("Failed to read response body: %w", err)
-	}
-	log.Printf("Code: %s Response: %s\n", res.Status, resBody)
-
-	return nil
-}
-
-func rename(oldPath, newPath string) error {
-	// Doesn't work, watcher go routine is too slow to catch os operation events
-	// processedFiles.mark(oldPath, "NECO_RENAME", false, false)
-	// defer processedFiles.unmark(oldPath)
-	// processedFiles.mark(newPath, "NECO_RENAME", false, false)
-	// defer processedFiles.unmark(newPath)
-	log.Printf("[RENAME] OLD: %s NEW: %s", oldPath, newPath)
-	err := os.Rename(oldPath, newPath)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func remove(targetPath string) error {
-	err := os.RemoveAll(targetPath)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func publish(publisher *rmq.Publisher, message *Message) {
-	message.Path = relativeConvert(message.Path)
-	message.OldPath = relativeConvert(message.OldPath)
+	message.Path = utils.AbsToRelConvert(syncDirectory, message.Path)
+	message.OldPath = utils.AbsToRelConvert(syncDirectory, message.OldPath)
 	if strings.Contains(message.Path, "\\") {
 		message.Path = uncursing(message.Path)
 	}
@@ -606,7 +505,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					"[CONSUMER] received message",
 					fmt.Sprintf("%+v", message),
 				)
-				absolutePath := absoluteConvert(message.Path)
+				absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
 				rmq.Info("[CONSUMER DEBUG] Rel to Abs: ", absolutePath)
 
 				err = deliveryContext.Accept(context.Background())
@@ -626,12 +525,12 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 						}
 						// Consuming directory create events
 					} else {
-						absolutePath := absoluteConvert(message.Path)
+						absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
 						rmq.Info("[CONSUMER] CREATING DIRECTORY", message.Path)
 						ignoreEvents.putIgnore(absolutePath)
-						err := createDirectory(absolutePath)
+						err := utils.MkDir(absolutePath)
 						if err != nil {
-							log.Println(err)
+							rmq.Error("[CONSUMER] Faield to create directory", err)
 						}
 						watcher.Add(absolutePath)
 					}
@@ -643,13 +542,13 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 						continue
 					}
 				case "NECO_RENAME":
-					absoluteOldPath := absoluteConvert(message.OldPath)
-					absoluteNewPath := absoluteConvert(message.Path)
+					absoluteOldPath := utils.RelToAbsConvert(syncDirectory, message.OldPath)
+					absoluteNewPath := utils.RelToAbsConvert(syncDirectory, message.Path)
 
 					rmq.Info("[CONSUMER] -NECO_RENAME-")
 					ignoreEvents.putIgnore(absoluteOldPath)
 					ignoreEvents.putIgnore(absoluteNewPath)
-					err := rename(absoluteOldPath, absoluteNewPath)
+					err := utils.Rename(absoluteOldPath, absoluteNewPath)
 					if err != nil {
 						rmq.Error("[CONSUMER] -NECO_REMAKE- ", err)
 					}
@@ -658,9 +557,9 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					}
 				case "REMOVE":
 					rmq.Info("[CONSUMER] -REMOVE-")
-					absolutePath := absoluteConvert(message.Path)
+					absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
 					ignoreEvents.putIgnore(absolutePath)
-					err := remove(absolutePath)
+					err := utils.Rm(absolutePath)
 					if err != nil {
 						rmq.Error("[CONSUMER] -REMOVE- Failed to remove", err)
 					}
@@ -730,7 +629,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if isDir(eventData.path) {
 					watcher.Add(eventData.path)
 				}
-				err := remoteRename(eventData.message.OldPath, eventData.message.Path)
+				err := api.RemoteRename(eventData.message.OldPath, eventData.message.Path, syncDirectory, serverURL)
 				if err != nil {
 					log.Println(err)
 				}
@@ -741,7 +640,10 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					continue
 				}
 				log.Printf("[EVENT PROCESSOR] -REMOVE- removing")
-				remove(eventData.path)
+				err := api.RemoteRemove(eventData.path, syncDirectory, serverURL)
+				if err != nil {
+					log.Println(err)
+				}
 				publish(publisher, eventData.message)
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)
@@ -919,21 +821,6 @@ func (ie IgnoreEvents) putIgnore(path string) {
 	}
 }
 
-func createDirectory(directory string) error {
-	log.Printf("[CREATE DIRECTORY] %s", directory)
-
-	// Doesn't work? Create event is delayed on Mkdir
-	// so event not caught in between mark/unmark
-	// processedFiles.mark(directory, "CREATE", true, false)
-	// defer processedFiles.unmark(directory)
-
-	err := os.MkdirAll(directory, 755)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func hasOldPath(eventString string) bool {
 	return strings.Contains(eventString, "←")
 }
@@ -944,14 +831,6 @@ func getOldPath(eventString string) string {
 	lastQuote := strings.LastIndex(oldHalf, "\"")
 
 	return oldHalf[firstQuote+1 : lastQuote]
-}
-
-func relativeConvert(absolutePath string) string {
-	return strings.TrimPrefix(absolutePath, syncDirectory)
-}
-
-func absoluteConvert(relativePath string) string {
-	return syncDirectory + relativePath
 }
 
 func uncursing(windowsPath string) string {
