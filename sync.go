@@ -54,7 +54,11 @@ func main() {
 	defer management.Close(context.Background())
 
 	// Assume that the queue exists already
-	management.PurgeQueue(context.Background(), queueName)
+	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
+	if err != nil {
+		log.Printf("[SYNC]-[PURGE]-[ERROR] %s\n", err)
+	}
+	log.Printf("[SYNC] PURGING %d\n", purgedAmount)
 
 	// Get file-server directory+file metadata
 	serverMetadata, err := downloadMetadata()
@@ -122,7 +126,7 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 	for _, path := range allPaths {
 		localFileMetadata, existsLocally := localMetadata.Files[path]
 		serverFileMetadata, existsOnServer := serverMetadata.Files[path]
-		absolutePath := utils.RelToAbsConvert(path, syncDirectory)
+		absolutePath := utils.RelToAbsConvert(syncDirectory, path)
 		fmt.Printf("[%s] local exist: %t | server exist: %t\n", path, existsLocally, existsOnServer)
 		// File exists on both
 		// ----------- only on server
