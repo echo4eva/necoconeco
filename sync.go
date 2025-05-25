@@ -6,6 +6,7 @@ package main
 
 import (
 	// "bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,10 +17,13 @@ import (
 	"github.com/echo4eva/necoconeco/internal/api"
 	"github.com/echo4eva/necoconeco/internal/utils"
 	"github.com/joho/godotenv"
+	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 	// "github.com/echo4eva/necoconeco/internal/utils"
 )
 
 var (
+	address       string
+	queueName     string
 	serverURL     string
 	syncDirectory string
 )
@@ -30,8 +34,27 @@ func main() {
 		log.Printf("No environment variables found\n", err)
 	}
 
+	address = os.Getenv("RABBITMQ_ADDRESS")
+	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
 	syncDirectory = os.Getenv("SYNC_DIRECTORY")
+
+	// Setup RabbitMQ client
+	env := rmq.NewEnvironment(address, nil)
+	defer env.CloseConnections(context.Background())
+
+	amqpConnection, err := env.NewConnection(context.Background())
+	if err != nil {
+		rmq.Error("Failed to create new connection")
+		return
+	}
+	defer amqpConnection.Close(context.Background())
+
+	management := amqpConnection.Management()
+	defer management.Close(context.Background())
+
+	// Assume that the queue exists already
+	management.PurgeQueue(context.Background(), queueName)
 
 	// Get file-server directory+file metadata
 	serverMetadata, err := downloadMetadata()
