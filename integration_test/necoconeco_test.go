@@ -23,20 +23,18 @@ func (tlc *TestLogConsumer) Accept(l testcontainers.Log) {
 	fmt.Printf("[%s] - %s", tlc.prefix, l.Content)
 }
 
-func TestMain(t *testing.T) {
-	ctx := context.Background()
-
-	log.Printf("MAKING NETWORK\n")
+func setupNetwork(ctx context.Context, t *testing.T) *testcontainers.DockerNetwork {
 	netNetwork, err := network.New(ctx)
 	require.NoError(t, err)
-	testcontainers.CleanupNetwork(t, netNetwork)
+	return netNetwork
+}
 
-	log.Printf("MAKING RABBIT CONTAINER\n")
+func setupRabbitMQ(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork) *rabbitmq.RabbitMQContainer {
 	rabbitContainer, err := rabbitmq.Run(
 		ctx,
 		"rabbitmq:4.0-management",
-		rabbitmq.WithAdminUsername("admin"),
-		rabbitmq.WithAdminPassword("password"),
+		rabbitmq.WithAdminUsername("guest"),
+		rabbitmq.WithAdminPassword("guest"),
 		testcontainers.WithWaitStrategy(
 			wait.ForExec([]string{"rabbitmq-diagnostics", "check_port_connectivity"}).
 				WithStartupTimeout(10*time.Second).
@@ -47,13 +45,11 @@ func TestMain(t *testing.T) {
 			prefix: "rabbitmq",
 		}),
 	)
-	if err != nil {
-		log.Printf("Failed to start rabbitmq container: %s", err)
-	}
 	require.NoError(t, err)
-	testcontainers.CleanupContainer(t, rabbitContainer)
+	return rabbitContainer
+}
 
-	log.Printf("MAKING FILE SERVER CONTAINER\n")
+func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork) testcontainers.Container {
 	fileServerContainer, err := testcontainers.Run(
 		ctx,
 		"",
@@ -69,11 +65,12 @@ func TestMain(t *testing.T) {
 			prefix: "file-server",
 		}),
 	)
-	testcontainers.CleanupContainer(t, fileServerContainer)
 	require.NoError(t, err)
+	return fileServerContainer
+}
 
-	log.Printf("MAKING CONTAINER-1\n")
-	firstContainer, err := testcontainers.Run(
+func setupClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
+	container, err := testcontainers.Run(
 		ctx,
 		"",
 		testcontainers.WithDockerfile(
@@ -84,58 +81,85 @@ func TestMain(t *testing.T) {
 		),
 		testcontainers.WithEnv(
 			map[string]string{
-				"CLIENT_ID":              "t-client-1",
-				"RABBITMQ_ADDRESS":       "amqp://admin:password@rabbitmq:5672/",
+				"CLIENT_ID":              clientID,
+				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
 				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    "queue-1",
+				"RABBITMQ_QUEUE_NAME":    queueName,
 				"RABBITMQ_ROUTING_KEY":   "routing.key",
 				"SYNC_DIRECTORY":         "/app",
 				"SYNC_SERVER_URL":        "file-server:8080",
 			},
 		),
 		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: "container-1",
+			prefix: clientID,
 		}),
+		network.WithNetwork([]string{"client"}, netNetwork),
 	)
-	testcontainers.CleanupContainer(t, firstContainer)
 	require.NoError(t, err)
-
-	// stack, err := compose.NewDockerComposeWith(
-	// 	compose.StackIdentifier("test"),
-	// 	compose.WithStackFiles("../docker-compose.yml"),
-	// )
-	// if err != nil {
-	// 	log.Printf("Failed to create stack: %s\n", err)
-	// }
-	// err = stack.Up(ctx, compose.Wait(true))
-	// if err != nil {
-	// 	log.Printf("Failed to start stack: %s\n", err)
-	// }
-	// defer func() {
-	// 	err = stack.Down(
-	// 		context.Background(),
-	// 		compose.RemoveOrphans(true),
-	// 		compose.RemoveVolumes(true),
-	// 		compose.RemoveImagesLocal,
-	// 	)
-	// 	if err != nil {
-	// 		log.Printf("Failed to stop stack: %s\n", err)
-	// 	}
-	// }()
-
-	// serviceNames := stack.Services()
-	// for _, name := range serviceNames {
-	// 	log.Printf("%s\n", name)
-	// }
-
-	// rabbitC, err := stack.ServiceContainer(context.Background(), "rabbitmq")
-	// if err != nil {
-	// 	log.Printf("Failed to get rabbitmq container: %s\n", err)
-	// }
-	// log.Printf("%s\n", rabbitC.ID)
-
-	require.NoError(t, err)
+	return container
 }
 
-func TestCreate(t *testing.T) {
+func TestMain(t *testing.T) {
+	ctx := context.Background()
+
+	log.Printf("MAKING NETWORK\n")
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	log.Printf("MAKING RABBIT CONTAINER\n")
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	log.Printf("MAKING FILE SERVER CONTAINER\n")
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	log.Printf("MAKING CONTAINER-1\n")
+	firstContainer := setupClientContainer(ctx, t, netNetwork, "t-client-1", "queue-1")
+	testcontainers.CleanupContainer(t, firstContainer)
+
+	log.Printf("MAKING CONTAINER-2\n")
+	secondContainer := setupClientContainer(ctx, t, netNetwork, "t-client-2", "queue-2")
+	testcontainers.CleanupContainer(t, secondContainer)
+}
+
+func TestFileSyncBetweenClients(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	firstClient := setupClientContainer(ctx, t, netNetwork, "t-client-1", "queue-1")
+	testcontainers.CleanupContainer(t, firstClient)
+
+	secondClient := setupClientContainer(ctx, t, netNetwork, "t-client-2", "queue-2")
+	testcontainers.CleanupContainer(t, secondClient)
+
+	// Create a file in the first client's sync directory
+	fileName := "testfile.md"
+	touchCmd := []string{"touch", fmt.Sprintf("/app/%s", fileName)}
+	exitCode, _, err := firstClient.Exec(ctx, touchCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for sync to propagate
+	time.Sleep(10 * time.Second)
+
+	// Check file exists in file server's working directory (/app/data or /app)
+	checkFileCmd := []string{"test", "-f", fmt.Sprintf("/app/storage/%s", fileName)}
+	exitCode, _, err = fileServerContainer.Exec(ctx, checkFileCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "File not found in file server")
+
+	// Check file exists in second client's sync directory (/app)
+	checkFileCmd = []string{"test", "-f", fmt.Sprintf("/app/%s", fileName)}
+	exitCode, _, err = secondClient.Exec(ctx, checkFileCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "File not found in second client")
 }

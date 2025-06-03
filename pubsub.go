@@ -103,6 +103,15 @@ func main() {
 	writeDebouncer = NewWriteDebouncer()
 	ignoreEvents = NewIgnoreEvents()
 
+	// Debug
+	log.Printf("CLIENT ID: %s", clientID)
+	log.Printf("ADDRESS: %s", address)
+	log.Printf("EXCHANGE NAME: %s", exchangeName)
+	log.Printf("QUEUE NAME: %s", queueName)
+	log.Printf("ROUTING KEY: %s", routingKey)
+	log.Printf("SYNC DIRECTORY: %s", syncDirectory)
+	log.Printf("SERVER URL: %s", serverURL)
+
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
 	defer env.CloseConnections(context.Background())
