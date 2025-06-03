@@ -133,6 +133,32 @@ func setupBareClientContainer(ctx context.Context, t *testing.T, netNetwork *tes
 	return container
 }
 
+func setupColdSyncClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
+	container, err := testcontainers.Run(
+		ctx,
+		"",
+		testcontainers.WithDockerfile(
+			testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "integration_test/clientCold.Dockerfile",
+			},
+		),
+		testcontainers.WithEnv(
+			map[string]string{
+				"CLIENT_ID":       clientID,
+				"SYNC_DIRECTORY":  "/sync",
+				"SYNC_SERVER_URL": "file-server:8080",
+			},
+		),
+		testcontainers.WithLogConsumers(&TestLogConsumer{
+			prefix: clientID,
+		}),
+		network.WithNetwork([]string{clientID}, netNetwork),
+	)
+	require.NoError(t, err)
+	return container
+}
+
 func TestMain(t *testing.T) {
 	ctx := context.Background()
 
@@ -400,4 +426,47 @@ func TestSyncGoBehavior(t *testing.T) {
 	checkFile(clientContainer, "/app/onServer/toBeDownloaded.md")
 	checkContent(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md", "download me")
 	checkContent(clientContainer, "/app/onServer/toBeDownloaded.md", "download me")
+}
+
+func TestColdSync(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	// This client is set up by clientCold.Dockerfile with files in /sync
+	coldClient := setupColdSyncClientContainer(ctx, t, netNetwork, "t-cold-client")
+	testcontainers.CleanupContainer(t, coldClient)
+
+	// Wait for cold sync to complete.
+	// The duration might need adjustment based on actual sync time.
+	// A more robust approach would be to check logs for a completion message
+	// or check file existence in a loop with a timeout.
+	log.Printf("Waiting for cold sync to complete...")
+	time.Sleep(5 * time.Second)
+
+	// Helper to check for file or directory existence on the file server
+	checkPathOnServer := func(container testcontainers.Container, path string, isDir bool) {
+		fullPath := "/app/storage/" + path // Files are stored under /app/storage on the server
+		var checkCmd []string
+		if isDir {
+			checkCmd = []string{"test", "-d", fullPath}
+		} else {
+			checkCmd = []string{"test", "-f", fullPath}
+		}
+		log.Printf("Checking for %s on file server at %s", path, fullPath)
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err, fmt.Sprintf("Error executing check for %s on server", fullPath))
+		require.Equal(t, 0, exitCode, "Path not found or not correct type on server: %s", fullPath)
+	}
+
+	// Assertions: Check if files from the client's /sync directory are on the file server
+	checkPathOnServer(fileServerContainer, "one.md", false)
+	checkPathOnServer(fileServerContainer, "folder", true)
+	checkPathOnServer(fileServerContainer, "folder/two.md", false)
+
+	log.Printf("Cold sync test completed successfully.")
 }
