@@ -97,7 +97,37 @@ func setupClientContainer(ctx context.Context, t *testing.T, netNetwork *testcon
 		testcontainers.WithLogConsumers(&TestLogConsumer{
 			prefix: clientID,
 		}),
-		network.WithNetwork([]string{"client"}, netNetwork),
+		network.WithNetwork([]string{clientID}, netNetwork),
+	)
+	require.NoError(t, err)
+	return container
+}
+
+func setupBareClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
+	container, err := testcontainers.Run(
+		ctx,
+		"",
+		testcontainers.WithDockerfile(
+			testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "clientBare.Dockerfile",
+			},
+		),
+		testcontainers.WithEnv(
+			map[string]string{
+				"CLIENT_ID":              clientID,
+				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+				"RABBITMQ_EXCHANGE_NAME": "exchange",
+				"RABBITMQ_QUEUE_NAME":    queueName,
+				"RABBITMQ_ROUTING_KEY":   "routing.key",
+				"SYNC_DIRECTORY":         "/app",
+				"SYNC_SERVER_URL":        "file-server:8080",
+			},
+		),
+		testcontainers.WithLogConsumers(&TestLogConsumer{
+			prefix: clientID,
+		}),
+		network.WithNetwork([]string{clientID}, netNetwork),
 	)
 	require.NoError(t, err)
 	return container
@@ -277,4 +307,107 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	checkNotExist(secondClient, newDirPath)
 	checkNotExist(fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", newDirName, newFileName))
 	checkNotExist(secondClient, fmt.Sprintf("%s/%s", newDirPath, newFileName))
+}
+
+func TestSyncGoBehavior(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	clientContainer := setupBareClientContainer(ctx, t, netNetwork, "sync-client", "sync-queue-1")
+	testcontainers.CleanupContainer(t, clientContainer)
+
+	// Setup: file-server
+	// 1. /app/storage/same.md (empty)
+	// 2. /app/storage/different.md (with content)
+	// 3. /app/storage/onServer/toBeDownloaded.md (with content)
+	_, _, err := fileServerContainer.Exec(ctx, []string{"mkdir", "-p", "/app/storage/onServer"})
+	require.NoError(t, err)
+	_, _, err = fileServerContainer.Exec(ctx, []string{"touch", "/app/storage/same.md"})
+	require.NoError(t, err)
+	_, _, err = fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'server content' > /app/storage/different.md"})
+	require.NoError(t, err)
+	_, _, err = fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'download me' > /app/storage/onServer/toBeDownloaded.md"})
+	require.NoError(t, err)
+
+	// Setup: client
+	// 1. /app/same.md (empty)
+	// 2. /app/different.md (empty)
+	// 3. /app/onClient/toBeDeleted.md (with content)
+	_, _, err = clientContainer.Exec(ctx, []string{"mkdir", "-p", "/app/onClient"})
+	require.NoError(t, err)
+	_, _, err = clientContainer.Exec(ctx, []string{"touch", "/app/same.md"})
+	require.NoError(t, err)
+	_, _, err = clientContainer.Exec(ctx, []string{"touch", "/app/different.md"})
+	require.NoError(t, err)
+	_, _, err = clientContainer.Exec(ctx, []string{"sh", "-c", "echo 'delete me' > /app/onClient/toBeDeleted.md"})
+	require.NoError(t, err)
+
+	// Run sync.go in the client container
+	exitCode, _, err := clientContainer.Exec(ctx, []string{"/app/sync"})
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	time.Sleep(3 * time.Second)
+
+	// Assertions
+	// 1. same.md exists and is empty on both
+	checkFile := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "-f", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "File not found: %s", path)
+	}
+	checkContent := func(container testcontainers.Container, path, expected string) {
+		catCmd := []string{"cat", path}
+		_, reader, err := container.Exec(ctx, catCmd)
+		require.NoError(t, err)
+		var stdout, stderr bytes.Buffer
+		_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+		require.NoError(t, err)
+		actual := strings.TrimSpace(stdout.String())
+		require.Equal(t, expected, actual, "File content mismatch for %s", path)
+	}
+	checkNotExist := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "!", "-e", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "Should not exist: %s", path)
+	}
+	checkDir := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "-d", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "Directory not found: %s", path)
+	}
+
+	// same.md
+	checkFile(fileServerContainer, "/app/storage/same.md")
+	checkFile(clientContainer, "/app/same.md")
+	checkContent(fileServerContainer, "/app/storage/same.md", "")
+	checkContent(clientContainer, "/app/same.md", "")
+
+	// different.md
+	checkFile(fileServerContainer, "/app/storage/different.md")
+	checkFile(clientContainer, "/app/different.md")
+	checkContent(fileServerContainer, "/app/storage/different.md", "server content")
+	checkContent(clientContainer, "/app/different.md", "server content")
+
+	// onClient and toBeDeleted.md should NOT exist on either
+	checkNotExist(fileServerContainer, "/app/storage/onClient")
+	checkNotExist(clientContainer, "/app/onClient")
+	checkNotExist(fileServerContainer, "/app/storage/onClient/toBeDeleted.md")
+	checkNotExist(clientContainer, "/app/onClient/toBeDeleted.md")
+
+	// onServer and toBeDownloaded.md should exist on both, with correct content
+	checkDir(fileServerContainer, "/app/storage/onServer")
+	checkDir(clientContainer, "/app/onServer")
+	checkFile(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md")
+	checkFile(clientContainer, "/app/onServer/toBeDownloaded.md")
+	checkContent(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md", "download me")
+	checkContent(clientContainer, "/app/onServer/toBeDownloaded.md", "download me")
 }
