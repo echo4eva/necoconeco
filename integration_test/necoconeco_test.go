@@ -110,7 +110,7 @@ func setupBareClientContainer(ctx context.Context, t *testing.T, netNetwork *tes
 		testcontainers.WithDockerfile(
 			testcontainers.FromDockerfile{
 				Context:    "..",
-				Dockerfile: "clientBare.Dockerfile",
+				Dockerfile: "integration_test/clientBare.Dockerfile",
 			},
 		),
 		testcontainers.WithEnv(
@@ -315,11 +315,11 @@ func TestSyncGoBehavior(t *testing.T) {
 	netNetwork := setupNetwork(ctx, t)
 	testcontainers.CleanupNetwork(t, netNetwork)
 
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
 	fileServerContainer := setupFileServer(ctx, t, netNetwork)
 	testcontainers.CleanupContainer(t, fileServerContainer)
-
-	clientContainer := setupBareClientContainer(ctx, t, netNetwork, "sync-client", "sync-queue-1")
-	testcontainers.CleanupContainer(t, clientContainer)
 
 	// Setup: file-server
 	// 1. /app/storage/same.md (empty)
@@ -334,23 +334,9 @@ func TestSyncGoBehavior(t *testing.T) {
 	_, _, err = fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'download me' > /app/storage/onServer/toBeDownloaded.md"})
 	require.NoError(t, err)
 
-	// Setup: client
-	// 1. /app/same.md (empty)
-	// 2. /app/different.md (empty)
-	// 3. /app/onClient/toBeDeleted.md (with content)
-	_, _, err = clientContainer.Exec(ctx, []string{"mkdir", "-p", "/app/onClient"})
-	require.NoError(t, err)
-	_, _, err = clientContainer.Exec(ctx, []string{"touch", "/app/same.md"})
-	require.NoError(t, err)
-	_, _, err = clientContainer.Exec(ctx, []string{"touch", "/app/different.md"})
-	require.NoError(t, err)
-	_, _, err = clientContainer.Exec(ctx, []string{"sh", "-c", "echo 'delete me' > /app/onClient/toBeDeleted.md"})
-	require.NoError(t, err)
-
-	// Run sync.go in the client container
-	exitCode, _, err := clientContainer.Exec(ctx, []string{"/app/sync"})
-	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
+	// No client-side setup needed; handled by Dockerfile
+	clientContainer := setupBareClientContainer(ctx, t, netNetwork, "sync-client", "sync-queue-1")
+	testcontainers.CleanupContainer(t, clientContainer)
 
 	time.Sleep(3 * time.Second)
 
@@ -386,24 +372,28 @@ func TestSyncGoBehavior(t *testing.T) {
 	}
 
 	// same.md
+	log.Printf("Checking same.md\n")
 	checkFile(fileServerContainer, "/app/storage/same.md")
 	checkFile(clientContainer, "/app/same.md")
 	checkContent(fileServerContainer, "/app/storage/same.md", "")
 	checkContent(clientContainer, "/app/same.md", "")
 
 	// different.md
+	log.Printf("Checking different.md\n")
 	checkFile(fileServerContainer, "/app/storage/different.md")
 	checkFile(clientContainer, "/app/different.md")
 	checkContent(fileServerContainer, "/app/storage/different.md", "server content")
 	checkContent(clientContainer, "/app/different.md", "server content")
 
 	// onClient and toBeDeleted.md should NOT exist on either
+	log.Printf("Checking onClient and toBeDeleted.md\n")
 	checkNotExist(fileServerContainer, "/app/storage/onClient")
 	checkNotExist(clientContainer, "/app/onClient")
 	checkNotExist(fileServerContainer, "/app/storage/onClient/toBeDeleted.md")
 	checkNotExist(clientContainer, "/app/onClient/toBeDeleted.md")
 
 	// onServer and toBeDownloaded.md should exist on both, with correct content
+	log.Printf("Checking onServer and toBeDownloaded.md\n")
 	checkDir(fileServerContainer, "/app/storage/onServer")
 	checkDir(clientContainer, "/app/onServer")
 	checkFile(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md")

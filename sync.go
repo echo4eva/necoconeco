@@ -34,6 +34,8 @@ func main() {
 		log.Printf("No environment variables found\n", err)
 	}
 
+	log.Printf("Starting sync client\n")
+
 	address = os.Getenv("RABBITMQ_ADDRESS")
 	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
@@ -52,6 +54,16 @@ func main() {
 
 	management := amqpConnection.Management()
 	defer management.Close(context.Background())
+
+	// Declaring queue just in case the client's queue doesn't exist
+	_, err = management.DeclareQueue(context.Background(), &rmq.ClassicQueueSpecification{
+		Name:         queueName,
+		IsAutoDelete: false,
+	})
+	if err != nil {
+		rmq.Error("Failed to declare queue", err)
+		return
+	}
 
 	// Assume that the queue exists already
 	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
