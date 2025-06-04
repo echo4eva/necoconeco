@@ -17,8 +17,8 @@ services:
       start_period: 10s
   container-1:
     build:
-      context: ./
-      dockerfile: client.Dockerfile
+      context: .
+      dockerfile: integration_test/client.Dockerfile
     container_name: container-1
     depends_on:
       rabbitmq:
@@ -29,7 +29,7 @@ services:
       - RABBITMQ_EXCHANGE_NAME=neco
       - RABBITMQ_QUEUE_NAME=t-queue-1
       - RABBITMQ_ROUTING_KEY=kappa.penis
-      - SYNC_DIRECTORY=/app
+      - SYNC_DIRECTORY=/app/sync
       - SYNC_SERVER_URL=file-server:8080
   # container-2:
   #   build:
@@ -49,8 +49,8 @@ services:
   #     - SYNC_SERVER_URL=file-server:8080
   file-server:
     build:
-      context: ./
-      dockerfile: server.Dockerfile
+      context: .
+      dockerfile: integration_test/server.Dockerfile
     container_name: file-server
     ports:
       - "8080:8080"

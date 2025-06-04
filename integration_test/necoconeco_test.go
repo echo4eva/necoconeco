@@ -60,7 +60,7 @@ func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontaine
 		testcontainers.WithDockerfile(
 			testcontainers.FromDockerfile{
 				Context:    "..",
-				Dockerfile: "server.Dockerfile",
+				Dockerfile: "integration_test/server.Dockerfile",
 			},
 		),
 		testcontainers.WithExposedPorts("8080/tcp"),
@@ -80,7 +80,7 @@ func setupClientContainer(ctx context.Context, t *testing.T, netNetwork *testcon
 		testcontainers.WithDockerfile(
 			testcontainers.FromDockerfile{
 				Context:    "..",
-				Dockerfile: "client.Dockerfile",
+				Dockerfile: "integration_test/client.Dockerfile",
 			},
 		),
 		testcontainers.WithEnv(
@@ -90,7 +90,7 @@ func setupClientContainer(ctx context.Context, t *testing.T, netNetwork *testcon
 				"RABBITMQ_EXCHANGE_NAME": "exchange",
 				"RABBITMQ_QUEUE_NAME":    queueName,
 				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app",
+				"SYNC_DIRECTORY":         "/app/sync",
 				"SYNC_SERVER_URL":        "file-server:8080",
 			},
 		),
@@ -120,7 +120,7 @@ func setupBareClientContainer(ctx context.Context, t *testing.T, netNetwork *tes
 				"RABBITMQ_EXCHANGE_NAME": "exchange",
 				"RABBITMQ_QUEUE_NAME":    queueName,
 				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app",
+				"SYNC_DIRECTORY":         "/app/sync",
 				"SYNC_SERVER_URL":        "file-server:8080",
 			},
 		),
@@ -146,7 +146,7 @@ func setupColdSyncClientContainer(ctx context.Context, t *testing.T, netNetwork 
 		testcontainers.WithEnv(
 			map[string]string{
 				"CLIENT_ID":       clientID,
-				"SYNC_DIRECTORY":  "/sync",
+				"SYNC_DIRECTORY":  "/app/sync", // Standardize client sync directory
 				"SYNC_SERVER_URL": "file-server:8080",
 			},
 		),
@@ -203,7 +203,7 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	// 1. Create a file in the first client's sync directory
 	fileName := "testfile.md"
-	filePath := fmt.Sprintf("/app/%s", fileName)
+	filePath := fmt.Sprintf("/app/sync/%s", fileName)
 	touchCmd := []string{"touch", filePath}
 	exitCode, _, err := firstClient.Exec(ctx, touchCmd)
 	require.NoError(t, err)
@@ -247,7 +247,7 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	// 3. Rename the file
 	newFileName := "renamed.md"
-	newFilePath := fmt.Sprintf("/app/%s", newFileName)
+	newFilePath := fmt.Sprintf("/app/sync/%s", newFileName)
 	renameCmd := []string{"mv", filePath, newFilePath}
 	exitCode, _, err = firstClient.Exec(ctx, renameCmd)
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	// 4. Create a directory
 	dirName := "mydir"
-	dirPath := fmt.Sprintf("/app/%s", dirName)
+	dirPath := fmt.Sprintf("/app/sync/%s", dirName)
 	mkdirCmd := []string{"mkdir", dirPath}
 	exitCode, _, err = firstClient.Exec(ctx, mkdirCmd)
 	require.NoError(t, err)
@@ -303,7 +303,7 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	// 6. Rename the directory
 	newDirName := "renameddir"
-	newDirPath := fmt.Sprintf("/app/%s", newDirName)
+	newDirPath := fmt.Sprintf("/app/sync/%s", newDirName)
 	renameDirCmd := []string{"mv", dirPath, newDirPath}
 	exitCode, _, err = firstClient.Exec(ctx, renameDirCmd)
 	require.NoError(t, err)
@@ -400,32 +400,32 @@ func TestSyncGoBehavior(t *testing.T) {
 	// same.md
 	log.Printf("Checking same.md\n")
 	checkFile(fileServerContainer, "/app/storage/same.md")
-	checkFile(clientContainer, "/app/same.md")
+	checkFile(clientContainer, "/app/sync/same.md")
 	checkContent(fileServerContainer, "/app/storage/same.md", "")
-	checkContent(clientContainer, "/app/same.md", "")
+	checkContent(clientContainer, "/app/sync/same.md", "")
 
 	// different.md
 	log.Printf("Checking different.md\n")
 	checkFile(fileServerContainer, "/app/storage/different.md")
-	checkFile(clientContainer, "/app/different.md")
+	checkFile(clientContainer, "/app/sync/different.md")
 	checkContent(fileServerContainer, "/app/storage/different.md", "server content")
-	checkContent(clientContainer, "/app/different.md", "server content")
+	checkContent(clientContainer, "/app/sync/different.md", "server content")
 
 	// onClient and toBeDeleted.md should NOT exist on either
 	log.Printf("Checking onClient and toBeDeleted.md\n")
 	checkNotExist(fileServerContainer, "/app/storage/onClient")
-	checkNotExist(clientContainer, "/app/onClient")
+	checkNotExist(clientContainer, "/app/sync/onClient")
 	checkNotExist(fileServerContainer, "/app/storage/onClient/toBeDeleted.md")
-	checkNotExist(clientContainer, "/app/onClient/toBeDeleted.md")
+	checkNotExist(clientContainer, "/app/sync/onClient/toBeDeleted.md")
 
 	// onServer and toBeDownloaded.md should exist on both, with correct content
 	log.Printf("Checking onServer and toBeDownloaded.md\n")
 	checkDir(fileServerContainer, "/app/storage/onServer")
-	checkDir(clientContainer, "/app/onServer")
+	checkDir(clientContainer, "/app/sync/onServer")
 	checkFile(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md")
-	checkFile(clientContainer, "/app/onServer/toBeDownloaded.md")
+	checkFile(clientContainer, "/app/sync/onServer/toBeDownloaded.md")
 	checkContent(fileServerContainer, "/app/storage/onServer/toBeDownloaded.md", "download me")
-	checkContent(clientContainer, "/app/onServer/toBeDownloaded.md", "download me")
+	checkContent(clientContainer, "/app/sync/onServer/toBeDownloaded.md", "download me")
 }
 
 func TestColdSync(t *testing.T) {

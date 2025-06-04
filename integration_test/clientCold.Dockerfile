@@ -1,20 +1,31 @@
-FROM golang:1.23.8
-
+FROM golang:1.23.8 AS go-builder
 WORKDIR /app
-RUN mkdir sync
 
-COPY go.mod go.sum coldsync.go ./
-COPY internal ./internal/
+COPY go.mod go.sum ./
 RUN go mod download
-RUN go build -tags coldsync -o ./coldsync
 
-# Create initial files and directories for cold sync test
-RUN mkdir -p /sync/folder && \
-    echo "content for one.md" > /sync/one.md && \
-    echo "content for two.md" > /sync/folder/two.md
+COPY internal/ ./internal/
+COPY coldsync.go ./
 
-# Copy the new entrypoint script
-COPY integration_test/cold_entrypoint.sh /cold_entrypoint.sh
-RUN chmod +x /cold_entrypoint.sh
+# The golang:1.23.8 image (often Debian-based) uses glibc.
+# The alpine:latest image uses musl libc, a different standard C library.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -tags coldsync -ldflags '-w -s' -o ./coldsync
 
-ENTRYPOINT ["/cold_entrypoint.sh"]
+# Stage 2: Final client image
+FROM alpine:latest
+WORKDIR /app
+
+# Copy only the compiled coldsync binary from the go-builder stage
+COPY --from=go-builder /app/coldsync ./coldsync
+
+# Create the directory needed by pubsub (e.g., for synced files or data)
+RUN mkdir -p /app/sync
+
+# Create initial files and directories for cold sync test in /app/sync
+RUN mkdir -p /app/sync/folder && \
+    echo "content for one.md" > /app/sync/one.md && \
+    echo "content for two.md" > /app/sync/folder/two.md
+
+COPY integration_test/cold_entrypoint.sh ./cold_entrypoint.sh
+RUN chmod +x ./cold_entrypoint.sh
+ENTRYPOINT [ "./cold_entrypoint.sh" ]
