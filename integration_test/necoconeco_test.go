@@ -470,3 +470,95 @@ func TestColdSync(t *testing.T) {
 
 	log.Printf("Cold sync test completed successfully.")
 }
+
+func TestWriteDebouncerRemoval(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	publishingClient := setupClientContainer(ctx, t, netNetwork, "debouncer-pub", "debouncer-queue-1")
+	testcontainers.CleanupContainer(t, publishingClient)
+
+	receivingClient := setupClientContainer(ctx, t, netNetwork, "debouncer-rec", "debouncer-queue-2")
+	testcontainers.CleanupContainer(t, receivingClient)
+
+	fileName := "edge.md"
+	filePath := "/app/sync/" + fileName
+
+	// 1. Publishing client creates a file named "edge.md"
+	touchCmd := []string{"touch", filePath}
+	exitCode, _, err := publishingClient.Exec(ctx, touchCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for sync
+	time.Sleep(3 * time.Second)
+
+	// Assert file exists on file server and receiving client
+	checkFile := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "-f", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "File not found: %s", path)
+	}
+	checkFile(fileServerContainer, "/app/storage/"+fileName)
+	checkFile(receivingClient, filePath)
+
+	// 2. Publishing client writes to the file but quickly renames it
+	content := "debouncer test 1"
+	writeCmd := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", content, filePath)}
+	renamedFileName := "renamed_edge.md"
+	renamedFilePath := "/app/sync/" + renamedFileName
+	renameCmd := []string{"mv", filePath, renamedFilePath}
+
+	// Write, then immediately rename
+	exitCode, _, err = publishingClient.Exec(ctx, writeCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	exitCode, _, err = publishingClient.Exec(ctx, renameCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for sync
+	time.Sleep(10 * time.Second)
+
+	// Assert old file does not exist, new file exists on both
+	checkNotExist := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "!", "-f", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "File should not exist: %s", path)
+	}
+	checkNotExist(fileServerContainer, "/app/storage/"+fileName)
+	checkNotExist(receivingClient, filePath)
+	checkFile(fileServerContainer, "/app/storage/"+renamedFileName)
+	checkFile(receivingClient, renamedFilePath)
+
+	// 3. Publishing client writes to renamed file, then quickly deletes it
+	content2 := "debouncer test 2"
+	writeCmd2 := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", content2, renamedFilePath)}
+	deleteCmd := []string{"rm", "-f", renamedFilePath}
+
+	exitCode, _, err = publishingClient.Exec(ctx, writeCmd2)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	exitCode, _, err = publishingClient.Exec(ctx, deleteCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for sync
+	time.Sleep(10 * time.Second)
+
+	// Assert file is deleted on both
+	checkNotExist(fileServerContainer, "/app/storage/"+renamedFileName)
+	checkNotExist(receivingClient, renamedFilePath)
+}
