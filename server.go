@@ -155,9 +155,9 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		path := reqPayload.Path
-		log.Printf("[REMOVE HANDLER] To remove: %s\n", path)
-
 		absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+
+		log.Printf("[REMOVE HANDLER] To remove: %s\n", absolutePath)
 		err = os.RemoveAll(absolutePath)
 		if err != nil {
 			http.Error(w, "Error removing", http.StatusInternalServerError)
