@@ -159,6 +159,36 @@ func setupColdSyncClientContainer(ctx context.Context, t *testing.T, netNetwork 
 	return container
 }
 
+func setupSyncPubsubClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
+	container, err := testcontainers.Run(
+		ctx,
+		"",
+		testcontainers.WithDockerfile(
+			testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "integration_test/clientSyncPubsub.Dockerfile",
+			},
+		),
+		testcontainers.WithEnv(
+			map[string]string{
+				"CLIENT_ID":              clientID,
+				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+				"RABBITMQ_EXCHANGE_NAME": "exchange",
+				"RABBITMQ_QUEUE_NAME":    queueName,
+				"RABBITMQ_ROUTING_KEY":   "routing.key",
+				"SYNC_DIRECTORY":         "/app/sync",
+				"SYNC_SERVER_URL":        "file-server:8080",
+			},
+		),
+		testcontainers.WithLogConsumers(&TestLogConsumer{
+			prefix: clientID,
+		}),
+		network.WithNetwork([]string{clientID}, netNetwork),
+	)
+	require.NoError(t, err)
+	return container
+}
+
 func TestMain(t *testing.T) {
 	ctx := context.Background()
 
@@ -561,4 +591,129 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 	// Assert file is deleted on both
 	checkNotExist(fileServerContainer, "/app/storage/"+renamedFileName)
 	checkNotExist(receivingClient, renamedFilePath)
+}
+
+func TestInitialClientSynchronization(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Initialize the Core Services
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	// 2. Simulate an Active User - Start publishing client
+	publishingClient := setupClientContainer(ctx, t, netNetwork, "publishing-client", "pub-queue")
+	testcontainers.CleanupContainer(t, publishingClient)
+
+	// Have publishing client create and modify files
+	log.Printf("Publishing client creating files...")
+
+	// Create file1.md
+	file1Name := "file1.md"
+	file1Path := fmt.Sprintf("/app/sync/%s", file1Name)
+	touchCmd := []string{"touch", file1Path}
+	exitCode, _, err := publishingClient.Exec(ctx, touchCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Write content to file1.md
+	file1Content := "This is the content of file1"
+	writeCmd1 := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", file1Content, file1Path)}
+	exitCode, _, err = publishingClient.Exec(ctx, writeCmd1)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Create file2.md
+	file2Name := "file2.md"
+	file2Path := fmt.Sprintf("/app/sync/%s", file2Name)
+	touchCmd2 := []string{"touch", file2Path}
+	exitCode, _, err = publishingClient.Exec(ctx, touchCmd2)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Write content to file2.md
+	file2Content := "This is the content of file2"
+	writeCmd2 := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", file2Content, file2Path)}
+	exitCode, _, err = publishingClient.Exec(ctx, writeCmd2)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for publishing client to sync files to server
+	log.Printf("Waiting for files to sync to server...")
+	time.Sleep(10 * time.Second)
+
+	// Verify files are on the server
+	checkFile := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "-f", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "File not found: %s", path)
+	}
+	checkContent := func(container testcontainers.Container, path, expected string) {
+		catCmd := []string{"cat", path}
+		_, reader, err := container.Exec(ctx, catCmd)
+		require.NoError(t, err)
+
+		var stdout, stderr bytes.Buffer
+		_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+		require.NoError(t, err)
+		actual := strings.TrimSpace(stdout.String())
+		require.Equal(t, expected, actual, "File content mismatch for %s", path)
+	}
+
+	checkFile(fileServerContainer, "/app/storage/"+file1Name)
+	checkFile(fileServerContainer, "/app/storage/"+file2Name)
+	checkContent(fileServerContainer, "/app/storage/"+file1Name, file1Content)
+	checkContent(fileServerContainer, "/app/storage/"+file2Name, file2Content)
+
+	// 3. Introduce the New Client - Start consuming client
+	log.Printf("Starting consuming client...")
+	consumingClient := setupSyncPubsubClientContainer(ctx, t, netNetwork, "consuming-client", "consume-queue")
+	testcontainers.CleanupContainer(t, consumingClient)
+
+	// 4. Wait for Initial Sync to complete
+	log.Printf("Waiting for initial sync to complete...")
+	time.Sleep(8 * time.Second)
+
+	// 5. Success Criteria - File Existence and Content
+	log.Printf("Verifying initial sync results...")
+
+	// Assert files exist on consuming client
+	checkFile(consumingClient, file1Path)
+	checkFile(consumingClient, file2Path)
+
+	// Assert file content matches
+	checkContent(consumingClient, file1Path, file1Content)
+	checkContent(consumingClient, file2Path, file2Content)
+
+	// 6. Test Real-time Sync - Create a new file on publishing client
+	log.Printf("Testing real-time sync...")
+	file3Name := "file3.md"
+	file3Path := fmt.Sprintf("/app/sync/%s", file3Name)
+	file3Content := "This is file3 created after initial sync"
+
+	// Create and write to file3
+	touchCmd3 := []string{"touch", file3Path}
+	exitCode, _, err = publishingClient.Exec(ctx, touchCmd3)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	writeCmd3 := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", file3Content, file3Path)}
+	exitCode, _, err = publishingClient.Exec(ctx, writeCmd3)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+
+	// Wait for real-time sync
+	time.Sleep(10 * time.Second)
+
+	// Assert file3 appears on consuming client via real-time sync
+	checkFile(consumingClient, file3Path)
+	checkContent(consumingClient, file3Path, file3Content)
+
+	log.Printf("Initial client synchronization test completed successfully!")
 }

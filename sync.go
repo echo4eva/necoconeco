@@ -139,6 +139,11 @@ func processMetadata(localMetadata, serverMetadata *utils.DirectoryMetadata) {
 		localFileMetadata, existsLocally := localMetadata.Files[path]
 		serverFileMetadata, existsOnServer := serverMetadata.Files[path]
 		absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+
+		if path == "." {
+			continue
+		}
+
 		fmt.Printf("[%s] local exist: %t | server exist: %t\n", path, existsLocally, existsOnServer)
 		// File exists on both
 		// ----------- only on server
