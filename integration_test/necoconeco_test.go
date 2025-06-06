@@ -189,6 +189,36 @@ func setupSyncPubsubClientContainer(ctx context.Context, t *testing.T, netNetwor
 	return container
 }
 
+func setupOfflineSyncClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
+	container, err := testcontainers.Run(
+		ctx,
+		"",
+		testcontainers.WithDockerfile(
+			testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "integration_test/clientOfflineSync.Dockerfile",
+			},
+		),
+		testcontainers.WithEnv(
+			map[string]string{
+				"CLIENT_ID":              clientID,
+				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+				"RABBITMQ_EXCHANGE_NAME": "exchange",
+				"RABBITMQ_QUEUE_NAME":    "offline-queue",
+				"RABBITMQ_ROUTING_KEY":   "routing.key",
+				"SYNC_DIRECTORY":         "/app/sync",
+				"SYNC_SERVER_URL":        "file-server:8080",
+			},
+		),
+		testcontainers.WithLogConsumers(&TestLogConsumer{
+			prefix: clientID,
+		}),
+		network.WithNetwork([]string{clientID}, netNetwork),
+	)
+	require.NoError(t, err)
+	return container
+}
+
 func TestMain(t *testing.T) {
 	ctx := context.Background()
 
@@ -716,4 +746,81 @@ func TestInitialClientSynchronization(t *testing.T) {
 	checkContent(consumingClient, file3Path, file3Content)
 
 	log.Printf("Initial client synchronization test completed successfully!")
+}
+
+func TestOfflineSync(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	// Setup initial server state with some conflicting files
+	_, _, err := fileServerContainer.Exec(ctx, []string{"mkdir", "-p", "/app/storage/nested"})
+	require.NoError(t, err)
+	_, _, err = fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'old server content' > /app/storage/kappa.md"})
+	require.NoError(t, err)
+	_, _, err = fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'old server content' > /app/storage/nested/chungus.md"})
+	require.NoError(t, err)
+
+	// This client is set up by clientOfflineSync.Dockerfile with files in /app/sync
+	offlineClient := setupOfflineSyncClientContainer(ctx, t, netNetwork, "t-offline-client")
+	testcontainers.CleanupContainer(t, offlineClient)
+
+	// Wait for offline sync to complete
+	log.Printf("Waiting for offline sync to complete...")
+	time.Sleep(5 * time.Second)
+
+	// Helper functions following existing pattern
+	checkPathOnServer := func(container testcontainers.Container, path string, isDir bool) {
+		fullPath := "/app/storage/" + path
+		var checkCmd []string
+		if isDir {
+			checkCmd = []string{"test", "-d", fullPath}
+		} else {
+			checkCmd = []string{"test", "-f", fullPath}
+		}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err, fmt.Sprintf("Error executing check for %s on server", fullPath))
+		require.Equal(t, 0, exitCode, "Path not found or not correct type on server: %s", fullPath)
+	}
+
+	checkContent := func(container testcontainers.Container, path, expected string) {
+		catCmd := []string{"cat", path}
+		_, reader, err := container.Exec(ctx, catCmd)
+		require.NoError(t, err)
+
+		var stdout, stderr bytes.Buffer
+		_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+		require.NoError(t, err)
+		actual := strings.TrimSpace(stdout.String())
+		require.Equal(t, expected, actual, "File content mismatch for %s", path)
+	}
+
+	checkNotExist := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "!", "-e", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "Should not exist: %s", path)
+	}
+
+	// Assertions: Check if files from the client's /app/sync directory are on the file server
+	checkPathOnServer(fileServerContainer, "root_file.md", false)
+	checkPathOnServer(fileServerContainer, "nested", true)
+	checkPathOnServer(fileServerContainer, "nested/middle_file.md", false)
+
+	// Check that content matches client (local is source of truth)
+	checkContent(fileServerContainer, "/app/storage/root_file.md", "This is a root level file for offline sync testing.\nIt contains multiple lines of content.")
+	checkContent(fileServerContainer, "/app/storage/nested/middle_file.md", "# Middle File\nThis is a markdown file.")
+
+	// Check that server-only files are removed
+	checkNotExist(fileServerContainer, "/app/storage/kappa.md")
+	checkNotExist(fileServerContainer, "/app/storage/nested/chungus.md")
+
+	log.Printf("Offline sync test completed successfully.")
 }
