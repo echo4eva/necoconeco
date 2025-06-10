@@ -21,6 +21,14 @@ type MetadataResponse struct {
 	*utils.DirectoryMetadata
 }
 
+type PostSanpshotResponse struct {
+	Response
+}
+
+type PostSnapshotRequest struct {
+	FinalSnapshot *utils.DirectoryMetadata `json:"final_snapshot"`
+}
+
 type UploadResponse struct {
 	Response
 	FileURL string `json:"file_url"`

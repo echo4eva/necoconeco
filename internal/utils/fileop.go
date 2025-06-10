@@ -139,6 +139,29 @@ func CreateDirectorySnapshot(syncDirectory string) error {
 	return nil
 }
 
+func GetLastSnapshot(syncDirectory string) (*DirectoryMetadata, bool, error) {
+	lastSnapshotPath := getNecoShotPath(syncDirectory)
+
+	// Read the json file
+	jsonData, err := os.ReadFile(lastSnapshotPath)
+	if err != nil {
+		// Determine error, DNE or an actual error
+		exists := os.IsNotExist(err)
+		if !exists {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("Failed to read json: %s\n", err)
+	}
+
+	var snapshot DirectoryMetadata
+	json.Unmarshal(jsonData, &snapshot)
+	if err != nil {
+		return nil, false, fmt.Errorf("Failed to unmarshal json data: %s\n", err)
+	}
+
+	return &snapshot, true, nil
+}
+
 func IsTrueHash(localHash, trueHash string) bool {
 	return localHash == trueHash
 }
