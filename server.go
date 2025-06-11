@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/echo4eva/necoconeco/internal/api"
 	"github.com/echo4eva/necoconeco/internal/utils"
@@ -18,6 +19,7 @@ import (
 
 var (
 	syncDirectory = "/app/storage"
+	serverURL     = ""
 )
 
 func main() {
@@ -29,6 +31,7 @@ func main() {
 	http.HandleFunc("/rename", renameHandler)
 	http.HandleFunc("/remove", removeHandler)
 	http.HandleFunc("/metadata", metadataHandler)
+	http.HandleFunc("/snapshot", snapshotHandler)
 
 	fmt.Println("Server started at :8080")
 	err := http.ListenAndServe("0.0.0.0:8080", nil)
@@ -199,4 +202,98 @@ func metadataHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 	}
+}
+
+func snapshotHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		response := api.PostSnapshotResponse{
+			SyncActionMetadata: &utils.SyncActionMetadata{},
+			Response:           api.Response{},
+		}
+
+		var reqPayload api.PostSnapshotRequest
+
+		err := json.NewDecoder(r.Body).Decode(&reqPayload)
+		if err != nil {
+			http.Error(w, "Error decoding json", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		clientSnapshot := reqPayload.FinalSnapshot
+		serverSnapshot, err := utils.GetLocalMetadata(syncDirectory)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error retrieving server local metadata: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Retrieve client actions by comparing snapshots
+		clientFileActions, err := processSnapshots(serverSnapshot, clientSnapshot)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error processing client and server snapshots: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		response.SyncActionMetadata = clientFileActions
+		response.Status = http.StatusOK
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMetadata, error) {
+	fileActions := utils.SyncActionMetadata{
+		Files: make(map[string]utils.FileActionMetadata),
+	}
+
+	// Compare client snapshot to server serverSnapshot to determine actions for client/server
+	for path, clientFileMetadata := range clientSnapshot.Files {
+		clientLastModified, err := time.Parse(utils.TimeFormat, clientFileMetadata.LastModified)
+		if err != nil {
+			return nil, err
+		}
+		clientFileStatus := clientFileMetadata.Status
+		// If exists in both
+		if serverFileMetadata, existsOnServer := serverSnapshot.Files[path]; existsOnServer {
+			serverLastModified, err := time.Parse(utils.TimeFormat, serverFileMetadata.LastModified)
+			if err != nil {
+				return nil, err
+			}
+			// LWW, Last Write Wins
+			// --- 1 - server wins
+			// --- 0 - same, do nothing
+			// --- -1 - client wins
+			switch serverLastModified.Compare(clientLastModified) {
+			// Server wins, send download action to client
+			case 1:
+				fileActions.Files[path] = utils.FileActionMetadata{
+					Action: utils.ActionDownload,
+				}
+			// Client wins
+			case -1:
+				// If deleted on client, server needs to delete
+				if clientFileStatus == utils.StatusDeleted {
+					absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+					os.RemoveAll(absolutePath)
+					// Else, send upload action to client
+				} else {
+					fileActions.Files[path] = utils.FileActionMetadata{
+						Action: utils.ActionUpload,
+					}
+				}
+			}
+			// Only exists on client, so just upload to file server
+		} else {
+			if clientFileStatus == utils.StatusExists {
+				fileActions.Files[path] = utils.FileActionMetadata{
+					Action: utils.ActionUpload,
+				}
+			}
+		}
+	}
+
+	return &fileActions, nil
 }

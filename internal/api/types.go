@@ -21,8 +21,9 @@ type MetadataResponse struct {
 	*utils.DirectoryMetadata
 }
 
-type PostSanpshotResponse struct {
+type PostSnapshotResponse struct {
 	Response
+	*utils.SyncActionMetadata
 }
 
 type PostSnapshotRequest struct {

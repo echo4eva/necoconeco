@@ -11,11 +11,19 @@ import (
 	"path/filepath"
 )
 
+type FileAction string
+type FileStatus string
+
 const (
 	StatusExists        = "exists"
 	StatusDeleted       = "deleted"
 	SnapshotFileName    = "necoshot.json"
 	HiddenDirectoryName = ".neco"
+
+	ActionUpload   FileAction = "upload"
+	ActionDownload FileAction = "download"
+
+	TimeFormat string = "RFC3339"
 )
 
 type FileMetadata struct {
@@ -24,8 +32,16 @@ type FileMetadata struct {
 	Status       string `json:"status"`
 }
 
+type FileActionMetadata struct {
+	Action FileAction `json:"action"`
+}
+
 type DirectoryMetadata struct {
 	Files map[string]FileMetadata `json:"files"`
+}
+
+type SyncActionMetadata struct {
+	Files map[string]FileActionMetadata `json:"files"`
 }
 
 func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
@@ -87,7 +103,7 @@ func CreateDirectorySnapshot(syncDirectory string) error {
 			log.Printf("Error getting file info")
 			return err
 		}
-		lastModified := fileInfo.ModTime().String()
+		lastModified := fileInfo.ModTime().Format(TimeFormat)
 		relativePath := AbsToRelConvert(syncDirectory, path)
 
 		// Debug
