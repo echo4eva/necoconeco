@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type FileAction string
@@ -23,7 +24,7 @@ const (
 	ActionUpload   FileAction = "upload"
 	ActionDownload FileAction = "download"
 
-	TimeFormat string = "RFC3339"
+	TimeFormat string = time.RFC3339
 )
 
 type FileMetadata struct {
@@ -55,7 +56,7 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 			log.Printf("Error getting file info")
 			return err
 		}
-		lastModified := fileInfo.ModTime().String()
+		lastModified := fileInfo.ModTime().Format(TimeFormat)
 		relativePath := AbsToRelConvert(syncDirectory, path)
 
 		// Debug

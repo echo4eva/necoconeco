@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -tags server -ldflags '-w -s' -o ./serv
 
 FROM alpine:latest
 WORKDIR /app
-
+RUN mkdir -p ./storage
 COPY --from=go-builder /app/server ./server
 RUN chmod +x ./server
 CMD [ "./server" ]

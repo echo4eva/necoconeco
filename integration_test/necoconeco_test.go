@@ -219,6 +219,36 @@ func setupOfflineSyncClientContainer(ctx context.Context, t *testing.T, netNetwo
 	return container
 }
 
+func setupClientSyncContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
+	container, err := testcontainers.Run(
+		ctx,
+		"",
+		testcontainers.WithDockerfile(
+			testcontainers.FromDockerfile{
+				Context:    "..",
+				Dockerfile: "integration_test/clientSync.Dockerfile",
+			},
+		),
+		testcontainers.WithEnv(
+			map[string]string{
+				"CLIENT_ID":              clientID,
+				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+				"RABBITMQ_EXCHANGE_NAME": "exchange",
+				"RABBITMQ_QUEUE_NAME":    "offline-queue",
+				"RABBITMQ_ROUTING_KEY":   "routing.key",
+				"SYNC_DIRECTORY":         "/app/sync",
+				"SYNC_SERVER_URL":        "file-server:8080",
+			},
+		),
+		testcontainers.WithLogConsumers(&TestLogConsumer{
+			prefix: clientID,
+		}),
+		network.WithNetwork([]string{clientID}, netNetwork),
+	)
+	require.NoError(t, err)
+	return container
+}
+
 func TestMain(t *testing.T) {
 	ctx := context.Background()
 
@@ -823,4 +853,65 @@ func TestOfflineSync(t *testing.T) {
 	checkNotExist(fileServerContainer, "/app/storage/nested/chungus.md")
 
 	log.Printf("Offline sync test completed successfully.")
+}
+func TestClientSyncBasicUploadDownload(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	// Setup: Create a file on server that client should download
+	_, _, err := fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'download me' > /app/storage/server_file.md"})
+	require.NoError(t, err)
+
+	// Create clientsync container - it has files from Dockerfile that should be uploaded
+	clientContainer := setupClientSyncContainer(ctx, t, netNetwork, "clientsync-basic")
+	testcontainers.CleanupContainer(t, clientContainer)
+
+	// Wait for sync to complete (pubsub runs automatically via Dockerfile)
+	time.Sleep(10 * time.Second)
+
+	// Assert: Both files should exist on both client and server
+	checkFile := func(container testcontainers.Container, path string) {
+		checkCmd := []string{"test", "-f", path}
+		exitCode, _, err := container.Exec(ctx, checkCmd)
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode, "File not found: %s", path)
+	}
+
+	checkContent := func(container testcontainers.Container, path, expected string) {
+		catCmd := []string{"cat", path}
+		_, reader, err := container.Exec(ctx, catCmd)
+		require.NoError(t, err)
+
+		var stdout, stderr bytes.Buffer
+		_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+		require.NoError(t, err)
+		actual := strings.TrimSpace(stdout.String())
+		require.Equal(t, expected, actual, "File content mismatch for %s", path)
+	}
+
+	// Check uploaded files (client -> server) - from Dockerfile
+	checkFile(fileServerContainer, "/app/storage/file.md")
+	checkContent(fileServerContainer, "/app/storage/file.md", "initial content")
+	checkFile(fileServerContainer, "/app/storage/another.md")
+	checkContent(fileServerContainer, "/app/storage/another.md", "another file")
+
+	// Check downloaded file (server -> client)
+	checkFile(clientContainer, "/app/sync/server_file.md")
+	checkContent(clientContainer, "/app/sync/server_file.md", "download me")
+
+	// Check original files still exist on client
+	checkFile(clientContainer, "/app/sync/file.md")
+	checkContent(clientContainer, "/app/sync/file.md", "initial content")
+	checkFile(clientContainer, "/app/sync/another.md")
+	checkContent(clientContainer, "/app/sync/another.md", "another file")
+
+	log.Printf("Basic upload/download test completed successfully")
 }

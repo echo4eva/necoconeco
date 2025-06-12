@@ -19,7 +19,6 @@ import (
 
 var (
 	syncDirectory = "/app/storage"
-	serverURL     = ""
 )
 
 func main() {
@@ -177,6 +176,7 @@ func removeHandler(w http.ResponseWriter, r *http.Request) {
 func metadataHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		log.Println("Received metadata request from client")
 		response := api.MetadataResponse{
 			DirectoryMetadata: &utils.DirectoryMetadata{},
 			Response:          api.Response{},
@@ -221,19 +221,32 @@ func snapshotHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer r.Body.Close()
 
+		log.Printf("Received snapshot from client: %+v\n", reqPayload.FinalSnapshot)
+
 		clientSnapshot := reqPayload.FinalSnapshot
-		serverSnapshot, err := utils.GetLocalMetadata(syncDirectory)
+
+		_, err = os.Stat(syncDirectory)
+		if err != nil {
+			http.Error(w, "Error sync directory not initialized", http.StatusInternalServerError)
+			return
+		}
+
+		var serverSnapshot *utils.DirectoryMetadata
+		serverSnapshot, err = utils.GetLocalMetadata(syncDirectory)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error retrieving server local metadata: %s", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("Server snapshot: %+v\n", serverSnapshot)
 
 		// Retrieve client actions by comparing snapshots
 		clientFileActions, err := processSnapshots(serverSnapshot, clientSnapshot)
 		if err != nil {
+			log.Printf("Error processing client and server snapshots: %s", err)
 			http.Error(w, fmt.Sprintf("Error processing client and server snapshots: %s", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("Client file actions: %+v\n", clientFileActions)
 
 		response.SyncActionMetadata = clientFileActions
 		response.Status = http.StatusOK
@@ -290,6 +303,17 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 			if clientFileStatus == utils.StatusExists {
 				fileActions.Files[path] = utils.FileActionMetadata{
 					Action: utils.ActionUpload,
+				}
+			}
+		}
+	}
+	// Now compare serverSnapshot to clientSnapshot to find files that exist on server but not on client
+	for path, serverFileMetadata := range serverSnapshot.Files {
+		if _, existsOnClient := clientSnapshot.Files[path]; !existsOnClient {
+			// If the file exists on the server and is not marked as deleted, client should download it
+			if serverFileMetadata.Status == utils.StatusExists {
+				fileActions.Files[path] = utils.FileActionMetadata{
+					Action: utils.ActionDownload,
 				}
 			}
 		}
