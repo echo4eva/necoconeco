@@ -23,6 +23,12 @@ type TestLogConsumer struct {
 	prefix string
 }
 
+type ClientConfig struct {
+	ID         string
+	Dockerfile string
+	QueueName  string
+}
+
 func (tlc *TestLogConsumer) Accept(l testcontainers.Log) {
 	fmt.Printf("[%s] - %s", tlc.prefix, l.Content)
 }
@@ -73,177 +79,31 @@ func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontaine
 	return fileServerContainer
 }
 
-func setupClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
-	container, err := testcontainers.Run(
-		ctx,
-		"",
-		testcontainers.WithDockerfile(
-			testcontainers.FromDockerfile{
-				Context:    "..",
-				Dockerfile: "integration_test/client.Dockerfile",
-			},
-		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":              clientID,
-				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
-				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    queueName,
-				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app/sync",
-				"SYNC_SERVER_URL":        "file-server:8080",
-			},
-		),
-		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
-		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
-	)
-	require.NoError(t, err)
-	return container
-}
+func setupClient(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, config ClientConfig) testcontainers.Container {
+	env := map[string]string{
+		"CLIENT_ID":              config.ID,
+		"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+		"RABBITMQ_EXCHANGE_NAME": "exchange",
+		"RABBITMQ_QUEUE_NAME":    config.QueueName,
+		"RABBITMQ_ROUTING_KEY":   "routing.key",
+		"SYNC_DIRECTORY":         "/app/sync",
+		"SYNC_SERVER_URL":        "file-server:8080",
+	}
 
-func setupBareClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
 	container, err := testcontainers.Run(
 		ctx,
 		"",
 		testcontainers.WithDockerfile(
 			testcontainers.FromDockerfile{
 				Context:    "..",
-				Dockerfile: "integration_test/clientBare.Dockerfile",
+				Dockerfile: "integration_test/" + config.Dockerfile,
 			},
 		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":              clientID,
-				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
-				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    queueName,
-				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app/sync",
-				"SYNC_SERVER_URL":        "file-server:8080",
-			},
-		),
+		testcontainers.WithEnv(env),
 		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
+			prefix: config.ID,
 		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
-	)
-	require.NoError(t, err)
-	return container
-}
-
-func setupColdSyncClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
-	container, err := testcontainers.Run(
-		ctx,
-		"",
-		testcontainers.WithDockerfile(
-			testcontainers.FromDockerfile{
-				Context:    "..",
-				Dockerfile: "integration_test/clientCold.Dockerfile",
-			},
-		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":       clientID,
-				"SYNC_DIRECTORY":  "/app/sync", // Standardize client sync directory
-				"SYNC_SERVER_URL": "file-server:8080",
-			},
-		),
-		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
-		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
-	)
-	require.NoError(t, err)
-	return container
-}
-
-func setupSyncPubsubClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID, queueName string) testcontainers.Container {
-	container, err := testcontainers.Run(
-		ctx,
-		"",
-		testcontainers.WithDockerfile(
-			testcontainers.FromDockerfile{
-				Context:    "..",
-				Dockerfile: "integration_test/clientSyncPubsub.Dockerfile",
-			},
-		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":              clientID,
-				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
-				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    queueName,
-				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app/sync",
-				"SYNC_SERVER_URL":        "file-server:8080",
-			},
-		),
-		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
-		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
-	)
-	require.NoError(t, err)
-	return container
-}
-
-func setupOfflineSyncClientContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
-	container, err := testcontainers.Run(
-		ctx,
-		"",
-		testcontainers.WithDockerfile(
-			testcontainers.FromDockerfile{
-				Context:    "..",
-				Dockerfile: "integration_test/clientOfflineSync.Dockerfile",
-			},
-		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":              clientID,
-				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
-				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    "offline-queue",
-				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app/sync",
-				"SYNC_SERVER_URL":        "file-server:8080",
-			},
-		),
-		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
-		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
-	)
-	require.NoError(t, err)
-	return container
-}
-
-func setupClientSyncContainer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork, clientID string) testcontainers.Container {
-	container, err := testcontainers.Run(
-		ctx,
-		"",
-		testcontainers.WithDockerfile(
-			testcontainers.FromDockerfile{
-				Context:    "..",
-				Dockerfile: "integration_test/clientSync.Dockerfile",
-			},
-		),
-		testcontainers.WithEnv(
-			map[string]string{
-				"CLIENT_ID":              clientID,
-				"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
-				"RABBITMQ_EXCHANGE_NAME": "exchange",
-				"RABBITMQ_QUEUE_NAME":    "offline-queue",
-				"RABBITMQ_ROUTING_KEY":   "routing.key",
-				"SYNC_DIRECTORY":         "/app/sync",
-				"SYNC_SERVER_URL":        "file-server:8080",
-			},
-		),
-		testcontainers.WithLogConsumers(&TestLogConsumer{
-			prefix: clientID,
-		}),
-		network.WithNetwork([]string{clientID}, netNetwork),
+		network.WithNetwork([]string{config.ID}, netNetwork),
 	)
 	require.NoError(t, err)
 	return container
@@ -265,11 +125,19 @@ func TestMain(t *testing.T) {
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
 	log.Printf("MAKING CONTAINER-1\n")
-	firstContainer := setupClientContainer(ctx, t, netNetwork, "t-client-1", "queue-1")
+	firstContainer := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-client-1",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "queue-1",
+	})
 	testcontainers.CleanupContainer(t, firstContainer)
 
 	log.Printf("MAKING CONTAINER-2\n")
-	secondContainer := setupClientContainer(ctx, t, netNetwork, "t-client-2", "queue-2")
+	secondContainer := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-client-2",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "queue-2",
+	})
 	testcontainers.CleanupContainer(t, secondContainer)
 }
 
@@ -285,10 +153,18 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	fileServerContainer := setupFileServer(ctx, t, netNetwork)
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
-	firstClient := setupClientContainer(ctx, t, netNetwork, "t-client-1", "queue-1")
+	firstClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-client-1",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "queue-1",
+	})
 	testcontainers.CleanupContainer(t, firstClient)
 
-	secondClient := setupClientContainer(ctx, t, netNetwork, "t-client-2", "queue-2")
+	secondClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-client-2",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "queue-2",
+	})
 	testcontainers.CleanupContainer(t, secondClient)
 
 	// 1. Create a file in the first client's sync directory
@@ -451,7 +327,11 @@ func TestSyncGoBehavior(t *testing.T) {
 	require.NoError(t, err)
 
 	// No client-side setup needed; handled by Dockerfile
-	clientContainer := setupBareClientContainer(ctx, t, netNetwork, "sync-client", "sync-queue-1")
+	clientContainer := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "sync-client",
+		Dockerfile: "clientBare.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
 	testcontainers.CleanupContainer(t, clientContainer)
 
 	time.Sleep(3 * time.Second)
@@ -528,7 +408,11 @@ func TestColdSync(t *testing.T) {
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
 	// This client is set up by clientCold.Dockerfile with files in /sync
-	coldClient := setupColdSyncClientContainer(ctx, t, netNetwork, "t-cold-client")
+	coldClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-cold-client",
+		Dockerfile: "clientCold.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
 	testcontainers.CleanupContainer(t, coldClient)
 
 	// Wait for cold sync to complete.
@@ -573,10 +457,18 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 	fileServerContainer := setupFileServer(ctx, t, netNetwork)
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
-	publishingClient := setupClientContainer(ctx, t, netNetwork, "debouncer-pub", "debouncer-queue-1")
+	publishingClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "debouncer-pub",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "debouncer-queue-1",
+	})
 	testcontainers.CleanupContainer(t, publishingClient)
 
-	receivingClient := setupClientContainer(ctx, t, netNetwork, "debouncer-rec", "debouncer-queue-2")
+	receivingClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "debouncer-rec",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "debouncer-queue-2",
+	})
 	testcontainers.CleanupContainer(t, receivingClient)
 
 	fileName := "edge.md"
@@ -667,7 +559,11 @@ func TestInitialClientSynchronization(t *testing.T) {
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
 	// 2. Simulate an Active User - Start publishing client
-	publishingClient := setupClientContainer(ctx, t, netNetwork, "publishing-client", "pub-queue")
+	publishingClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "publishing-client",
+		Dockerfile: "client.Dockerfile",
+		QueueName:  "pub-queue",
+	})
 	testcontainers.CleanupContainer(t, publishingClient)
 
 	// Have publishing client create and modify files
@@ -733,7 +629,11 @@ func TestInitialClientSynchronization(t *testing.T) {
 
 	// 3. Introduce the New Client - Start consuming client
 	log.Printf("Starting consuming client...")
-	consumingClient := setupSyncPubsubClientContainer(ctx, t, netNetwork, "consuming-client", "consume-queue")
+	consumingClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "consuming-client",
+		Dockerfile: "clientSyncPubsub.Dockerfile",
+		QueueName:  "consume-queue",
+	})
 	testcontainers.CleanupContainer(t, consumingClient)
 
 	// 4. Wait for Initial Sync to complete
@@ -777,7 +677,6 @@ func TestInitialClientSynchronization(t *testing.T) {
 
 	log.Printf("Initial client synchronization test completed successfully!")
 }
-
 func TestOfflineSync(t *testing.T) {
 	ctx := context.Background()
 
@@ -799,7 +698,11 @@ func TestOfflineSync(t *testing.T) {
 	require.NoError(t, err)
 
 	// This client is set up by clientOfflineSync.Dockerfile with files in /app/sync
-	offlineClient := setupOfflineSyncClientContainer(ctx, t, netNetwork, "t-offline-client")
+	offlineClient := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "t-offline-client",
+		Dockerfile: "clientOfflineSync.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
 	testcontainers.CleanupContainer(t, offlineClient)
 
 	// Wait for offline sync to complete
@@ -854,6 +757,48 @@ func TestOfflineSync(t *testing.T) {
 
 	log.Printf("Offline sync test completed successfully.")
 }
+
+func TestClientSyncNecoshot(t *testing.T) {
+	ctx := context.Background()
+
+	netNetwork := setupNetwork(ctx, t)
+	testcontainers.CleanupNetwork(t, netNetwork)
+
+	rabbitContainer := setupRabbitMQ(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, rabbitContainer)
+
+	fileServerContainer := setupFileServer(ctx, t, netNetwork)
+	testcontainers.CleanupContainer(t, fileServerContainer)
+
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client wins LWW delete, delete on server' > /app/storage/sync/client_win_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client loses LWW delete, client redownloads' > /app/storage/sync/client_lose_delete.md"})
+
+	// Notes for integration tests:
+	// client_win_delete.md on client Last modified is 2025-01-01 00:00:01
+	// client_lose_delete.md on client Last modified is 2025-01-01 00:00:00
+	// Forge Last modified file dates:
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:01' /app/storage/sync/client_win_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/sync/client_lose_delete.md"})
+
+	// Create clientsync container
+	clientContainer := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "clientsync-necoshot",
+		Dockerfile: "clientNecoshot.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
+	testcontainers.CleanupContainer(t, clientContainer)
+
+	// Wait for sync to complete
+	time.Sleep(10 * time.Second)
+
+	// Check file server
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/sync/client_win_delete.md")
+	checkExist(t, ctx, fileServerContainer, "/app/storage/sync/client_lose_delete.md", false)
+
+	// Check client
+	checkNotExist(t, ctx, clientContainer, "/app/sync/client_win_delete.md")
+	checkExist(t, ctx, clientContainer, "/app/sync/client_lose_delete.md", false)
+}
 func TestClientSyncBasicUploadDownload(t *testing.T) {
 	ctx := context.Background()
 
@@ -871,7 +816,11 @@ func TestClientSyncBasicUploadDownload(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create clientsync container - it has files from Dockerfile that should be uploaded
-	clientContainer := setupClientSyncContainer(ctx, t, netNetwork, "clientsync-basic")
+	clientContainer := setupClient(ctx, t, netNetwork, ClientConfig{
+		ID:         "clientsync-basic",
+		Dockerfile: "clientSync.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
 	testcontainers.CleanupContainer(t, clientContainer)
 
 	// Wait for sync to complete (pubsub runs automatically via Dockerfile)
@@ -914,4 +863,33 @@ func TestClientSyncBasicUploadDownload(t *testing.T) {
 	checkContent(clientContainer, "/app/sync/another.md", "another file")
 
 	log.Printf("Basic upload/download test completed successfully")
+}
+
+func checkExist(t *testing.T, ctx context.Context, container testcontainers.Container, path string, isDir bool) {
+	checkCmd := []string{"test", "-f", path}
+	if isDir {
+		checkCmd = []string{"test", "-d", path}
+	}
+	exitCode, _, err := container.Exec(ctx, checkCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "File not found: %s", path)
+}
+
+func checkContent(t *testing.T, ctx context.Context, container testcontainers.Container, path, expected string) {
+	catCmd := []string{"cat", path}
+	_, reader, err := container.Exec(ctx, catCmd)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+	require.NoError(t, err)
+	actual := strings.TrimSpace(stdout.String())
+	require.Equal(t, expected, actual, "File content mismatch for %s", path)
+}
+
+func checkNotExist(t *testing.T, ctx context.Context, container testcontainers.Container, path string) {
+	checkCmd := []string{"test", "!", "-e", path}
+	exitCode, _, err := container.Exec(ctx, checkCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "Should not exist: %s", path)
 }

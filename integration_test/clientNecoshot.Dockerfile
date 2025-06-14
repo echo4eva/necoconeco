@@ -19,20 +19,23 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-w -s' -o ./necoshot_generato
 RUN mkdir -p /sync
 
 # Create sample files and directories for testing
-RUN echo "This is a test file 1" > /sync/test1.md && \
-    echo "This is a test file 2" > /sync/test2.md && \
+RUN echo "Client wins LWW delete, delete on server" > /sync/client_win_delete.md && \
+    echo "Client loses LWW delete, client redownloads" > /sync/client_lose_delete.md && \
     mkdir -p /sync/subdir && \
-    echo "This is a nested file" > /sync/subdir/nested.md && \
-    mkdir -p /sync/empty_dir && \
-    echo "Another test file" > /sync/another.md
+    echo "Client wins LWW, DNE on server, upload to server" > /sync/subdir/client_regular_upload.md && \
+    mkdir -p /sync/empty_dir
 
-RUN touch -d "2025-01-01 00:00:00" /sync/test1.md && \
-    touch -d "2025-01-01 00:00:00" /sync/test2.md && \
-    touch -d "2025-01-01 00:00:00" /sync/subdir/nested.md && \
-    touch -d "2025-01-01 00:00:00" /sync/another.md
+# Notes for integration tests:
+# client_win_delete.md on server Last modified is 2025-01-01 00:00:00
+# client_lose_delete.md on server Last modified is 2025-01-01 00:00:01
+# Forge Last modified file dates:
+RUN touch -d "2025-01-01 00:00:01" /sync/client_win_delete.md && \
+    touch -d "2025-01-01 00:00:00" /sync/client_lose_delete.md
 
 # Generate the perfect necoshot.json using our helper
 RUN ./necoshot_generator -dir /sync
+
+RUN ls -la /sync/.neco/
 
 # Stage 2: Final client image with pre-existing snapshot
 FROM golang:1.23.8-alpine AS sync-builder
@@ -51,9 +54,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -tags clientsync -ldflags '-w -s' -o ./
 # Stage 3: Final client image
 FROM alpine:latest
 WORKDIR /app
+RUN mkdir -p /app/sync/.neco
 
 # Copy the test data and necoshot.json from the previous stage
-COPY --from=snapshot-generator /app/sync/.neco/necoshot.json /app/sync/.neco/necoshot.json
+COPY --from=snapshot-generator /sync/.neco/necoshot.json ./sync/.neco/necoshot.json
 COPY --from=sync-builder /app/clientsync ./clientsync
 
 # Verify the necoshot.json was copied correctly
