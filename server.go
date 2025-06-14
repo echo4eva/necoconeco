@@ -277,11 +277,12 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 			}
 			// LWW, Last Write Wins
 			// --- 1 - server wins
-			// --- 0 - same, do nothing
+			// --- 0 - tie
 			// --- -1 - client wins
 			switch serverLastModified.Compare(clientLastModified) {
 			// Server wins, send download action to client
 			case 1:
+				log.Printf("[PROCESS SNAPSHOTS] Server wins, sending download action to client: %s\n", path)
 				fileActions.Files[path] = utils.FileActionMetadata{
 					Action: utils.ActionDownload,
 				}
@@ -290,17 +291,28 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 				// If deleted on client, server needs to delete
 				if clientFileStatus == utils.StatusDeleted {
 					absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+					log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Client wins, removing file on server: %s\n", absolutePath)
 					os.RemoveAll(absolutePath)
 					// Else, send upload action to client
 				} else {
+					log.Printf("[PROCESS SNAPSHOTS] Client wins, sending upload action to client: %s\n", path)
 					fileActions.Files[path] = utils.FileActionMetadata{
 						Action: utils.ActionUpload,
 					}
+				}
+			// Tie
+			case 0:
+				// If deleted on client, server needs to delete
+				if clientFileStatus == utils.StatusDeleted {
+					absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+					log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Tie, removing file on server: %s\n", absolutePath)
+					os.RemoveAll(absolutePath)
 				}
 			}
 			// Only exists on client, so just upload to file server
 		} else {
 			if clientFileStatus == utils.StatusExists {
+				log.Printf("[PROCESS SNAPSHOTS] File only exists on client, sending upload action to client: %s\n", path)
 				fileActions.Files[path] = utils.FileActionMetadata{
 					Action: utils.ActionUpload,
 				}

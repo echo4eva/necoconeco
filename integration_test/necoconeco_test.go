@@ -224,14 +224,8 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	checkFile(fileServerContainer, "/app/storage/"+newFileName)
 	checkFile(secondClient, newFilePath)
 	// Old file should not exist
-	checkNotExist := func(container testcontainers.Container, path string) {
-		checkCmd := []string{"test", "!", "-f", path}
-		exitCode, _, err := container.Exec(ctx, checkCmd)
-		require.NoError(t, err)
-		require.Equal(t, 0, exitCode, "File should not exist: %s", path)
-	}
-	checkNotExist(fileServerContainer, "/app/storage/"+fileName)
-	checkNotExist(secondClient, filePath)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+fileName)
+	checkNotExist(t, ctx, secondClient, filePath)
 
 	// 4. Create a directory
 	dirName := "mydir"
@@ -264,8 +258,8 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	checkFile(fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", dirName, newFileName))
 	checkFile(secondClient, movedFilePath)
 	// Old file should not exist
-	checkNotExist(fileServerContainer, "/app/storage/"+newFileName)
-	checkNotExist(secondClient, newFilePath)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+newFileName)
+	checkNotExist(t, ctx, secondClient, newFilePath)
 
 	// 6. Rename the directory
 	newDirName := "renameddir"
@@ -282,10 +276,10 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	checkFile(fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", newDirName, newFileName))
 	checkFile(secondClient, fmt.Sprintf("%s/%s", newDirPath, newFileName))
 	// Old directory and file should not exist
-	checkNotExist(fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", dirName, newFileName))
-	checkNotExist(secondClient, movedFilePath)
-	checkNotExist(fileServerContainer, "/app/storage/"+dirName)
-	checkNotExist(secondClient, dirPath)
+	checkNotExist(t, ctx, fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", dirName, newFileName))
+	checkNotExist(t, ctx, secondClient, movedFilePath)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+dirName)
+	checkNotExist(t, ctx, secondClient, dirPath)
 
 	// 7. Delete the directory
 	rmDirCmd := []string{"rm", "-rf", newDirPath}
@@ -295,10 +289,10 @@ func TestFileSyncBetweenClients(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Assert directory and file are gone
-	checkNotExist(fileServerContainer, "/app/storage/"+newDirName)
-	checkNotExist(secondClient, newDirPath)
-	checkNotExist(fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", newDirName, newFileName))
-	checkNotExist(secondClient, fmt.Sprintf("%s/%s", newDirPath, newFileName))
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+newDirName)
+	checkNotExist(t, ctx, secondClient, newDirPath)
+	checkNotExist(t, ctx, fileServerContainer, fmt.Sprintf("/app/storage/%s/%s", newDirName, newFileName))
+	checkNotExist(t, ctx, secondClient, fmt.Sprintf("%s/%s", newDirPath, newFileName))
 }
 
 func TestSyncGoBehavior(t *testing.T) {
@@ -354,12 +348,6 @@ func TestSyncGoBehavior(t *testing.T) {
 		actual := strings.TrimSpace(stdout.String())
 		require.Equal(t, expected, actual, "File content mismatch for %s", path)
 	}
-	checkNotExist := func(container testcontainers.Container, path string) {
-		checkCmd := []string{"test", "!", "-e", path}
-		exitCode, _, err := container.Exec(ctx, checkCmd)
-		require.NoError(t, err)
-		require.Equal(t, 0, exitCode, "Should not exist: %s", path)
-	}
 	checkDir := func(container testcontainers.Container, path string) {
 		checkCmd := []string{"test", "-d", path}
 		exitCode, _, err := container.Exec(ctx, checkCmd)
@@ -383,10 +371,10 @@ func TestSyncGoBehavior(t *testing.T) {
 
 	// onClient and toBeDeleted.md should NOT exist on either
 	log.Printf("Checking onClient and toBeDeleted.md\n")
-	checkNotExist(fileServerContainer, "/app/storage/onClient")
-	checkNotExist(clientContainer, "/app/sync/onClient")
-	checkNotExist(fileServerContainer, "/app/storage/onClient/toBeDeleted.md")
-	checkNotExist(clientContainer, "/app/sync/onClient/toBeDeleted.md")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/onClient")
+	checkNotExist(t, ctx, clientContainer, "/app/sync/onClient")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/onClient/toBeDeleted.md")
+	checkNotExist(t, ctx, clientContainer, "/app/sync/onClient/toBeDeleted.md")
 
 	// onServer and toBeDownloaded.md should exist on both, with correct content
 	log.Printf("Checking onServer and toBeDownloaded.md\n")
@@ -513,14 +501,8 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	// Assert old file does not exist, new file exists on both
-	checkNotExist := func(container testcontainers.Container, path string) {
-		checkCmd := []string{"test", "!", "-f", path}
-		exitCode, _, err := container.Exec(ctx, checkCmd)
-		require.NoError(t, err)
-		require.Equal(t, 0, exitCode, "File should not exist: %s", path)
-	}
-	checkNotExist(fileServerContainer, "/app/storage/"+fileName)
-	checkNotExist(receivingClient, filePath)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+fileName)
+	checkNotExist(t, ctx, receivingClient, filePath)
 	checkFile(fileServerContainer, "/app/storage/"+renamedFileName)
 	checkFile(receivingClient, renamedFilePath)
 
@@ -541,8 +523,8 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	// Assert file is deleted on both
-	checkNotExist(fileServerContainer, "/app/storage/"+renamedFileName)
-	checkNotExist(receivingClient, renamedFilePath)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/"+renamedFileName)
+	checkNotExist(t, ctx, receivingClient, renamedFilePath)
 }
 
 func TestInitialClientSynchronization(t *testing.T) {
@@ -677,6 +659,7 @@ func TestInitialClientSynchronization(t *testing.T) {
 
 	log.Printf("Initial client synchronization test completed successfully!")
 }
+
 func TestOfflineSync(t *testing.T) {
 	ctx := context.Background()
 
@@ -735,13 +718,6 @@ func TestOfflineSync(t *testing.T) {
 		require.Equal(t, expected, actual, "File content mismatch for %s", path)
 	}
 
-	checkNotExist := func(container testcontainers.Container, path string) {
-		checkCmd := []string{"test", "!", "-e", path}
-		exitCode, _, err := container.Exec(ctx, checkCmd)
-		require.NoError(t, err)
-		require.Equal(t, 0, exitCode, "Should not exist: %s", path)
-	}
-
 	// Assertions: Check if files from the client's /app/sync directory are on the file server
 	checkPathOnServer(fileServerContainer, "root_file.md", false)
 	checkPathOnServer(fileServerContainer, "nested", true)
@@ -752,8 +728,8 @@ func TestOfflineSync(t *testing.T) {
 	checkContent(fileServerContainer, "/app/storage/nested/middle_file.md", "# Middle File\nThis is a markdown file.")
 
 	// Check that server-only files are removed
-	checkNotExist(fileServerContainer, "/app/storage/kappa.md")
-	checkNotExist(fileServerContainer, "/app/storage/nested/chungus.md")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/kappa.md")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/nested/chungus.md")
 
 	log.Printf("Offline sync test completed successfully.")
 }
@@ -770,15 +746,15 @@ func TestClientSyncNecoshot(t *testing.T) {
 	fileServerContainer := setupFileServer(ctx, t, netNetwork)
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client wins LWW delete, delete on server' > /app/storage/sync/client_win_delete.md"})
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client loses LWW delete, client redownloads' > /app/storage/sync/client_lose_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client wins LWW delete, delete on server' > /app/storage/client_win_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client loses LWW delete, client redownloads' > /app/storage/client_lose_delete.md"})
 
 	// Notes for integration tests:
 	// client_win_delete.md on client Last modified is 2025-01-01 00:00:01
 	// client_lose_delete.md on client Last modified is 2025-01-01 00:00:00
 	// Forge Last modified file dates:
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:01' /app/storage/sync/client_win_delete.md"})
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/sync/client_lose_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_win_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:01' /app/storage/client_lose_delete.md"})
 
 	// Create clientsync container
 	clientContainer := setupClient(ctx, t, netNetwork, ClientConfig{
@@ -792,13 +768,14 @@ func TestClientSyncNecoshot(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	// Check file server
-	checkNotExist(t, ctx, fileServerContainer, "/app/storage/sync/client_win_delete.md")
-	checkExist(t, ctx, fileServerContainer, "/app/storage/sync/client_lose_delete.md", false)
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_win_delete.md")
+	checkExist(t, ctx, fileServerContainer, "/app/storage/client_lose_delete.md", false)
 
 	// Check client
 	checkNotExist(t, ctx, clientContainer, "/app/sync/client_win_delete.md")
 	checkExist(t, ctx, clientContainer, "/app/sync/client_lose_delete.md", false)
 }
+
 func TestClientSyncBasicUploadDownload(t *testing.T) {
 	ctx := context.Background()
 
@@ -888,8 +865,8 @@ func checkContent(t *testing.T, ctx context.Context, container testcontainers.Co
 }
 
 func checkNotExist(t *testing.T, ctx context.Context, container testcontainers.Container, path string) {
-	checkCmd := []string{"test", "!", "-e", path}
+	checkCmd := []string{"test", "-e", path}
 	exitCode, _, err := container.Exec(ctx, checkCmd)
 	require.NoError(t, err)
-	require.Equal(t, 0, exitCode, "Should not exist: %s", path)
+	require.Equal(t, 1, exitCode, "Should not exist: %s", path)
 }
