@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/echo4eva/necoconeco/internal/api"
@@ -56,11 +55,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	os.MkdirAll("./storage", os.ModePerm)
-
-	log.Printf("%s", relativePath)
-
-	dst, err := os.Create(filepath.Join("./storage/", relativePath))
+	absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
+	directory := utils.GetOnlyDir(absolutePath)
+	if err := utils.MkDir(directory); err != nil {
+		http.Error(w, "Error creating directory", http.StatusInternalServerError)
+		return
+	}
+	dst, err := os.Create(absolutePath)
 	if err != nil {
 		http.Error(w, "Error creating file", http.StatusInternalServerError)
 		return
@@ -356,6 +357,15 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 					err := utils.Rm(absolutePath)
 					if err != nil {
 						return nil, err
+					}
+				} else {
+					if !isDirectory {
+						if clientFileMetadata.ContentHash != serverFileMetadata.ContentHash {
+							log.Printf("[PROCESS SNAPSHOTS] Tie, file content hash mismatch, uploading to server: %s\n", path)
+							fileActions.Files[path] = utils.FileActionMetadata{
+								Action: utils.ActionUpload,
+							}
+						}
 					}
 				}
 			default:

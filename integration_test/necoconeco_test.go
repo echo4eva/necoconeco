@@ -747,20 +747,31 @@ func TestClientSyncNecoshot(t *testing.T) {
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
 	// Create files on server
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client wins LWW delete, delete on server' > /app/storage/client_win_delete.md"})
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client loses LWW delete, client redownloads' > /app/storage/client_lose_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'filler for compare' > /app/storage/client_win_upload.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'should be gone' > /app/storage/client_win_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'server win' > /app/storage/client_lose_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'tie delete' > /app/storage/client_tie_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'filler for compare' > /app/storage/client_tie_win.md"})
 
 	// Create directories on server
 	fileServerContainer.Exec(ctx, []string{"sh", "-c", "mkdir /app/storage/server_subdir"})
-	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client should download this' > /app/storage/server_subdir/server.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'Client should download this' > /app/storage/server_subdir/server.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "mkdir /app/storage/server_empty_subdir"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "mkdir /app/storage/client_win_delete_subdir"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "mkdir /app/storage/client_tie_delete_subdir"})
 
 	// Notes for integration tests:
+	// client_win_upload.md on client Last modified is 2025-01-01 00:00:01
 	// client_win_delete.md on client Last modified is 2025-01-01 00:00:01
 	// client_lose_delete.md on client Last modified is 2025-01-01 00:00:00
 	// Forge Last modified file dates:
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_win_upload.md"})
 	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_win_delete.md"})
 	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:01' /app/storage/client_lose_delete.md"})
-
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_win_delete_subdir"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_tie_delete.md"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_tie_delete_subdir"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "touch -d '2025-01-01 00:00:00' /app/storage/client_tie_win.md"})
 	// Create clientsync container
 	clientContainer := setupClient(ctx, t, netNetwork, ClientConfig{
 		ID:         "clientsync-necoshot",
@@ -773,13 +784,19 @@ func TestClientSyncNecoshot(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	// Check file server
+	checkContent(t, ctx, fileServerContainer, "/app/storage/client_win_upload.md", "client win")
 	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_win_delete.md")
 	checkExist(t, ctx, fileServerContainer, "/app/storage/client_lose_delete.md", false)
+	checkExist(t, ctx, fileServerContainer, "/app/storage/client_subdir", true)
 	checkExist(t, ctx, fileServerContainer, "/app/storage/client_subdir/client_regular_upload.md", false)
-
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_win_delete_subdir")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_tie_delete.md")
+	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_tie_delete_subdir")
+	checkContent(t, ctx, fileServerContainer, "/app/storage/client_tie_win.md", "client tie win")
 	// Check client
 	checkNotExist(t, ctx, clientContainer, "/app/sync/client_win_delete.md")
-	checkExist(t, ctx, clientContainer, "/app/sync/client_lose_delete.md", false)
+	checkContent(t, ctx, clientContainer, "/app/sync/client_lose_delete.md", "server win")
+	checkExist(t, ctx, clientContainer, "/app/sync/server_subdir", true)
 	checkExist(t, ctx, clientContainer, "/app/sync/server_subdir/server.md", false)
 }
 

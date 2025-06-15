@@ -213,7 +213,14 @@ func processActions(syncActionMetadata *utils.SyncActionMetadata) {
 			} else {
 				log.Printf("Successfully downloaded %s", relativePath)
 			}
-
+		case utils.ActionMkdir:
+			absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
+			err := utils.MkDir(absolutePath)
+			if err != nil {
+				log.Printf("Failed to create directory %s: %s", relativePath, err)
+			} else {
+				log.Printf("Successfully created directory %s", relativePath)
+			}
 		default:
 			log.Printf("Unknown action: %s for file: %s", fileActionMetadata.Action, relativePath)
 		}
