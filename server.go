@@ -262,68 +262,124 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 		Files: make(map[string]utils.FileActionMetadata),
 	}
 
-	// Compare client snapshot to server serverSnapshot to determine actions for client/server
-	for path, clientFileMetadata := range clientSnapshot.Files {
-		clientLastModified, err := time.Parse(utils.TimeFormat, clientFileMetadata.LastModified)
-		if err != nil {
-			return nil, err
-		}
-		clientFileStatus := clientFileMetadata.Status
-		// If exists in both
-		if serverFileMetadata, existsOnServer := serverSnapshot.Files[path]; existsOnServer {
+	// Accumulate all unique paths from both local and server metadata
+	allPathsSet := make(map[string]struct{})
+	for path := range serverSnapshot.Files {
+		allPathsSet[path] = struct{}{}
+	}
+	for path := range clientSnapshot.Files {
+		allPathsSet[path] = struct{}{}
+	}
+
+	// Reallocate paths into slice, just makes sense
+	allPaths := make([]string, 0, len(allPathsSet))
+	for path := range allPathsSet {
+		allPaths = append(allPaths, path)
+	}
+
+	for _, path := range allPaths {
+		serverFileMetadata, existsOnServer := serverSnapshot.Files[path]
+		clientFileMetadata, existsOnClient := clientSnapshot.Files[path]
+
+		// If exists do LWW
+		if existsOnServer && existsOnClient {
+			// isDirectory should be correct, since we're operating on a path existing in both
+			// but do `==` anyways to look good.
+			// Don't think there should be edge case of foo (dir) and foo (file) since we operate
+			// with only markdown.
+			// But could be if a dumbass uses `foo.md` (dir) and `foo.md` (file) in same director
+			// TODO: fix edge case later
+			isDirectory := clientFileMetadata.IsDirectory
 			serverLastModified, err := time.Parse(utils.TimeFormat, serverFileMetadata.LastModified)
 			if err != nil {
 				return nil, err
 			}
+			clientLastModified, err := time.Parse(utils.TimeFormat, clientFileMetadata.LastModified)
+			if err != nil {
+				return nil, err
+			}
+
 			// LWW, Last Write Wins
 			// --- 1 - server wins
-			// --- 0 - tie
 			// --- -1 - client wins
+			// --- 0 - tie
+			log.Printf("[PROCESS SNAPSHOTS - %d] Server last modified: %s | Client last modified: %s | Path: %s\n", serverLastModified.Compare(clientLastModified), serverLastModified, clientLastModified, path)
+
 			switch serverLastModified.Compare(clientLastModified) {
-			// Server wins, send download action to client
+			// Server wins
 			case 1:
-				log.Printf("[PROCESS SNAPSHOTS] Server wins, sending download action to client: %s\n", path)
-				fileActions.Files[path] = utils.FileActionMetadata{
-					Action: utils.ActionDownload,
+				log.Printf("[PROCESS SNAPSHOTS] Server wins, HELLO WORLD\n")
+				if !isDirectory {
+					log.Printf("[PROCESS SNAPSHOTS] Server wins, sending download action to client: %s\n", path)
+					fileActions.Files[path] = utils.FileActionMetadata{
+						Action: utils.ActionDownload,
+					}
 				}
 			// Client wins
 			case -1:
+				clientFileStatus := clientFileMetadata.Status
 				// If deleted on client, server needs to delete
 				if clientFileStatus == utils.StatusDeleted {
 					absolutePath := utils.RelToAbsConvert(syncDirectory, path)
-					log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Client wins, removing file on server: %s\n", absolutePath)
-					os.RemoveAll(absolutePath)
+					if isDirectory {
+						log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Client wins, removing directory on server: %s\n", absolutePath)
+					} else {
+						log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Client wins, removing file on server: %s\n", absolutePath)
+					}
+					log.Printf("[PROCESS SNAPSHOTS] Removing file: %s\n", absolutePath)
+					// Deletes path or file
+					err := utils.Rm(absolutePath)
+					if err != nil {
+						log.Printf("[PROCESS SNAPSHOTS] Error removing file: %s\n", err)
+						return nil, err
+					}
 					// Else, send upload action to client
 				} else {
-					log.Printf("[PROCESS SNAPSHOTS] Client wins, sending upload action to client: %s\n", path)
-					fileActions.Files[path] = utils.FileActionMetadata{
-						Action: utils.ActionUpload,
+					if !isDirectory {
+						log.Printf("[PROCESS SNAPSHOTS] Client wins, sending upload action to client: %s\n", path)
+						fileActions.Files[path] = utils.FileActionMetadata{
+							Action: utils.ActionUpload,
+						}
 					}
 				}
-			// Tie
+				// Tie
 			case 0:
-				// If deleted on client, server needs to delete
+				clientFileStatus := clientFileMetadata.Status
 				if clientFileStatus == utils.StatusDeleted {
 					absolutePath := utils.RelToAbsConvert(syncDirectory, path)
-					log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Tie, removing file on server: %s\n", absolutePath)
-					os.RemoveAll(absolutePath)
+					if isDirectory {
+						log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Tie, removing directory on server: %s\n", absolutePath)
+					} else {
+						log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Tie, removing file on server: %s\n", absolutePath)
+					}
+					// Deletes path or file
+					err := utils.Rm(absolutePath)
+					if err != nil {
+						return nil, err
+					}
 				}
+			default:
+				log.Printf("[PROCESS SNAPSHOTS] NOT WORKING: %s\n", path)
 			}
-			// Only exists on client, so just upload to file server
-		} else {
-			if clientFileStatus == utils.StatusExists {
-				log.Printf("[PROCESS SNAPSHOTS] File only exists on client, sending upload action to client: %s\n", path)
+		} else if !existsOnServer && existsOnClient {
+			if clientFileMetadata.IsDirectory {
+				log.Printf("[PROCESS SNAPSHOTS] Directory exists only on client, creating on server: %s\n", path)
+				absolutePath := utils.RelToAbsConvert(syncDirectory, path)
+				utils.MkDir(absolutePath)
+			} else {
+				log.Printf("[PROCESS SNAPSHOTS] File only exists on client, upload to server: %s\n", path)
 				fileActions.Files[path] = utils.FileActionMetadata{
 					Action: utils.ActionUpload,
 				}
 			}
-		}
-	}
-	// Now compare serverSnapshot to clientSnapshot to find files that exist on server but not on client
-	for path, serverFileMetadata := range serverSnapshot.Files {
-		if _, existsOnClient := clientSnapshot.Files[path]; !existsOnClient {
-			// If the file exists on the server and is not marked as deleted, client should download it
-			if serverFileMetadata.Status == utils.StatusExists {
+		} else if existsOnServer && !existsOnClient {
+			if serverFileMetadata.IsDirectory {
+				log.Printf("[PROCESS SNAPSHOTS] Directory exists only on server, action client to make directory: %s\n", path)
+				fileActions.Files[path] = utils.FileActionMetadata{
+					Action: utils.ActionMkdir,
+				}
+			} else {
+				log.Printf("[PROCESS SNAPSHOTS] File exists only on server, action client to download from server: %s\n", path)
 				fileActions.Files[path] = utils.FileActionMetadata{
 					Action: utils.ActionDownload,
 				}

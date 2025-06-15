@@ -23,6 +23,7 @@ const (
 
 	ActionUpload   FileAction = "upload"
 	ActionDownload FileAction = "download"
+	ActionMkdir    FileAction = "mkdir"
 
 	TimeFormat string = time.RFC3339
 )
@@ -31,6 +32,7 @@ type FileMetadata struct {
 	LastModified string `json:"last_modified"`
 	ContentHash  string `json:"content_hash,omitempty"`
 	Status       string `json:"status"`
+	IsDirectory  bool   `json:"is_directory"`
 }
 
 type FileActionMetadata struct {
@@ -75,12 +77,14 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 				LastModified: lastModified,
 				ContentHash:  contentHash,
 				Status:       StatusExists,
+				IsDirectory:  false,
 			}
 		} else {
 			if relativePath != "." {
 				directoryMetadata.Files[relativePath] = FileMetadata{
 					LastModified: lastModified,
 					Status:       StatusExists,
+					IsDirectory:  true,
 				}
 			}
 		}
@@ -129,6 +133,7 @@ func CreateDirectorySnapshot(syncDirectory string) error {
 				directoryMetadata.Files[relativePath] = FileMetadata{
 					LastModified: lastModified,
 					Status:       StatusExists,
+					IsDirectory:  true,
 				}
 			}
 		}

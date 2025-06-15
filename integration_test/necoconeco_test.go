@@ -746,8 +746,13 @@ func TestClientSyncNecoshot(t *testing.T) {
 	fileServerContainer := setupFileServer(ctx, t, netNetwork)
 	testcontainers.CleanupContainer(t, fileServerContainer)
 
+	// Create files on server
 	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client wins LWW delete, delete on server' > /app/storage/client_win_delete.md"})
 	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client loses LWW delete, client redownloads' > /app/storage/client_lose_delete.md"})
+
+	// Create directories on server
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "mkdir /app/storage/server_subdir"})
+	fileServerContainer.Exec(ctx, []string{"sh", "-c", "echo 'client should download this' > /app/storage/server_subdir/server.md"})
 
 	// Notes for integration tests:
 	// client_win_delete.md on client Last modified is 2025-01-01 00:00:01
@@ -770,10 +775,12 @@ func TestClientSyncNecoshot(t *testing.T) {
 	// Check file server
 	checkNotExist(t, ctx, fileServerContainer, "/app/storage/client_win_delete.md")
 	checkExist(t, ctx, fileServerContainer, "/app/storage/client_lose_delete.md", false)
+	checkExist(t, ctx, fileServerContainer, "/app/storage/client_subdir/client_regular_upload.md", false)
 
 	// Check client
 	checkNotExist(t, ctx, clientContainer, "/app/sync/client_win_delete.md")
 	checkExist(t, ctx, clientContainer, "/app/sync/client_lose_delete.md", false)
+	checkExist(t, ctx, clientContainer, "/app/sync/server_subdir/server.md", false)
 }
 
 func TestClientSyncBasicUploadDownload(t *testing.T) {
