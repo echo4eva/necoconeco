@@ -311,9 +311,11 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 			case 1:
 				log.Printf("[PROCESS SNAPSHOTS] Server wins, HELLO WORLD\n")
 				if !isDirectory {
-					log.Printf("[PROCESS SNAPSHOTS] Server wins, sending download action to client: %s\n", path)
-					fileActions.Files[path] = utils.FileActionMetadata{
-						Action: utils.ActionDownload,
+					if serverFileMetadata.ContentHash != clientFileMetadata.ContentHash {
+						log.Printf("[PROCESS SNAPSHOTS] Server wins, sending download action to client: %s\n", path)
+						fileActions.Files[path] = utils.FileActionMetadata{
+							Action: utils.ActionDownload,
+						}
 					}
 				}
 			// Client wins
@@ -337,9 +339,11 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 					// Else, send upload action to client
 				} else {
 					if !isDirectory {
-						log.Printf("[PROCESS SNAPSHOTS] Client wins, sending upload action to client: %s\n", path)
-						fileActions.Files[path] = utils.FileActionMetadata{
-							Action: utils.ActionUpload,
+						if serverFileMetadata.ContentHash != clientFileMetadata.ContentHash {
+							log.Printf("[PROCESS SNAPSHOTS] Client wins, sending upload action to client: %s\n", path)
+							fileActions.Files[path] = utils.FileActionMetadata{
+								Action: utils.ActionUpload,
+							}
 						}
 					}
 				}
@@ -360,7 +364,7 @@ func processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (
 					}
 				} else {
 					if !isDirectory {
-						if clientFileMetadata.ContentHash != serverFileMetadata.ContentHash {
+						if serverFileMetadata.ContentHash != clientFileMetadata.ContentHash {
 							log.Printf("[PROCESS SNAPSHOTS] Tie, file content hash mismatch, uploading to server: %s\n", path)
 							fileActions.Files[path] = utils.FileActionMetadata{
 								Action: utils.ActionUpload,
