@@ -257,12 +257,12 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "t-client-1",
-		Dockerfile: "client.Dockerfile",
+		Dockerfile: "clientPubSub.Dockerfile",
 		QueueName:  "queue-1",
 	})
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "t-client-2",
-		Dockerfile: "client.Dockerfile",
+		Dockerfile: "clientPubSub.Dockerfile",
 		QueueName:  "queue-2",
 	})
 
@@ -355,12 +355,12 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "debouncer-pub",
-		Dockerfile: "client.Dockerfile",
+		Dockerfile: "clientPubSub.Dockerfile",
 		QueueName:  "debouncer-queue-1",
 	})
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "debouncer-rec",
-		Dockerfile: "client.Dockerfile",
+		Dockerfile: "clientPubSub.Dockerfile",
 		QueueName:  "debouncer-queue-2",
 	})
 
@@ -447,7 +447,7 @@ func TestClientSyncNecoshot(t *testing.T) {
 	// Create clientsync container
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "clientsync-necoshot",
-		Dockerfile: "clientNecoshot.Dockerfile",
+		Dockerfile: "clientSync.Dockerfile",
 		QueueName:  "sync-queue-1",
 	})
 	clientContainer := env.Clients["clientsync-necoshot"]
