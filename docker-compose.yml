@@ -31,22 +31,6 @@ services:
       - RABBITMQ_ROUTING_KEY=kappa.penis
       - SYNC_DIRECTORY=/app/sync
       - SYNC_SERVER_URL=file-server:8080
-  # container-2:
-  #   build:
-  #     context: ./
-  #     dockerfile: client.Dockerfile
-  #   container_name: container-2
-  #   depends_on:
-  #     rabbitmq:
-  #       condition: service_healthy
-  #   environment:
-  #     - CLIENT_ID=t-client-2
-  #     - RABBITMQ_ADDRESS=amqp://kappa:chungus@rabbitmq:5672/
-  #     - RABBITMQ_EXCHANGE_NAME=neco
-  #     - RABBITMQ_QUEUE_NAME=t-queue-2
-  #     - RABBITMQ_ROUTING_KEY=kappa.penis
-  #     - SYNC_DIRECTORY=/app
-  #     - SYNC_SERVER_URL=file-server:8080
   file-server:
     build:
       context: .
