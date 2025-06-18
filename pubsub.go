@@ -144,6 +144,16 @@ func main() {
 		return
 	}
 
+	// Assume that the queue exists already
+	// Second measure, just incase the client running this did a sync.
+	// If sync, the file server put messages in their queue that are redundant.
+	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
+	if err != nil {
+		log.Printf("[PUBSUB]-[PURGE]-[ERROR] %s\n", err)
+		return
+	}
+	log.Printf("[PUBSUB] PURGING %d\n", purgedAmount)
+
 	_, err = management.Bind(context.TODO(), &rmq.ExchangeToQueueBindingSpecification{
 		SourceExchange:   exchangeName,
 		DestinationQueue: queueName,
@@ -498,7 +508,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					publish(publisher, eventData.message)
 				} else if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
-					api.RemoteMkdir(eventData.message.Path, syncDirectory, serverURL)
+					api.RemoteMkdir(eventData.message.Path, syncDirectory, serverURL, clientID)
 					if processedFiles.isProcessed(eventData.path) {
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
@@ -526,7 +536,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
 				}
-				err := api.RemoteRename(eventData.message.OldPath, eventData.message.Path, syncDirectory, serverURL)
+				err := api.RemoteRename(eventData.message.OldPath, eventData.message.Path, syncDirectory, serverURL, clientID)
 				if err != nil {
 					log.Println(err)
 				}
@@ -537,7 +547,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					continue
 				}
 				log.Printf("[EVENT PROCESSOR] -REMOVE- removing")
-				err := api.RemoteRemove(eventData.path, syncDirectory, serverURL)
+				err := api.RemoteRemove(eventData.path, syncDirectory, serverURL, clientID)
 				if err != nil {
 					log.Println(err)
 				}

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/echo4eva/necoconeco/internal/api"
@@ -19,9 +20,18 @@ import (
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 )
 
+type Message struct {
+	ClientID string `json:"client_id"`
+	Event    string `json:"event"`
+	Path     string `json:"path"`
+	FileURL  string `json:"file_url"`
+	OldPath  string `json:"old_path,omitempty"`
+}
+
 type Server struct {
 	publisher     *rmq.Publisher
 	syncDirectory string
+	clientID      string
 }
 
 func main() {
@@ -32,6 +42,7 @@ func main() {
 
 	server := &Server{}
 
+	server.clientID = os.Getenv("CLIENT_ID")
 	server.syncDirectory = os.Getenv("SYNC_DIRECTORY")
 	address := os.Getenv("RABBITMQ_ADDRESS")
 	exchangeName := os.Getenv("RABBITMQ_EXHANGE_NAME")
@@ -86,6 +97,46 @@ func main() {
 	}
 }
 
+func (s *Server) publish(message *Message) error {
+	jsonData, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+
+	publishResult, err := s.publisher.Publish(context.Background(), rmq.NewMessage(jsonData))
+	if err != nil {
+		return err
+	}
+	rmq.Info("[PUBLISHER] SENDING MESSAGE")
+
+	// ACKs and NACKs from broker to publisher
+	switch publishResult.Outcome.(type) {
+	case *rmq.StateAccepted:
+		rmq.Info("[PUBLISHER] Message accepted", publishResult.Message.Data[0])
+	case *rmq.StateRejected:
+		rmq.Info("[PUBLISHER] Message rejected", publishResult.Message.Data[0])
+	case *rmq.StateReleased:
+		rmq.Info("[PUBLISHER] Message released", publishResult.Message.Data[0])
+	}
+
+	return nil
+}
+
+func (s *Server) handleUpload(clientID, path string) error {
+	message := &Message{
+		ClientID: clientID,
+		Event:    "CREATE",
+		Path:     path,
+	}
+
+	err := s.publish(message)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -93,6 +144,7 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	relativePath := r.FormValue("path")
+	clientID := r.FormValue("client_id")
 
 	r.ParseMultipartForm(10 << 20)
 
@@ -124,6 +176,12 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	fileURL := fmt.Sprintf("http://%s/files/%s", r.Host, relativePath)
 
+	err = s.handleUpload(clientID, relativePath)
+	if err != nil {
+		http.Error(w, "Error handling upload", http.StatusInternalServerError)
+		log.Printf("Error handling upload: %s\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	response := api.UploadResponse{
 		Response: api.Response{
@@ -132,6 +190,25 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 		FileURL: fileURL,
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handleDirectory(clientID, absolutePath string) error {
+	if err := utils.MkDir(absolutePath); err != nil {
+		return err
+	}
+
+	message := &Message{
+		ClientID: clientID,
+		Event:    "CREATE",
+		Path:     utils.AbsToRelConvert(s.syncDirectory, absolutePath),
+	}
+
+	err := s.publish(message)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Server) directoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -147,10 +224,13 @@ func (s *Server) directoryHandler(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		relativeDirectory := reqPayload.Directory
+		clientID := reqPayload.ClientID
+
 		log.Printf("[DIRECTORY HANDLER] %s\n", reqPayload.Directory)
 		absolutePath := utils.RelToAbsConvert(s.syncDirectory, relativeDirectory)
-		err = utils.MkDir(absolutePath)
+		err = s.handleDirectory(clientID, absolutePath)
 		if err != nil {
+			log.Printf("Error handling directory: %s\n", err)
 			http.Error(w, "Error creating direcgtory", http.StatusInternalServerError)
 			return
 		}
@@ -160,6 +240,26 @@ func (s *Server) directoryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(response)
 	}
+}
+
+func (s *Server) handleRename(clientID, oldName, newName string) error {
+	if err := utils.Rename(oldName, newName); err != nil {
+		return err
+	}
+
+	message := &Message{
+		ClientID: clientID,
+		Event:    "NECO_RENAME",
+		Path:     utils.AbsToRelConvert(s.syncDirectory, newName),
+		OldPath:  utils.AbsToRelConvert(s.syncDirectory, oldName),
+	}
+
+	err := s.publish(message)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Server) renameHandler(w http.ResponseWriter, r *http.Request) {
@@ -174,14 +274,16 @@ func (s *Server) renameHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer r.Body.Close()
 
+		clientID := reqPayload.ClientID
 		oldName := reqPayload.OldName
 		newName := reqPayload.NewName
 		absoluteOld := utils.RelToAbsConvert(s.syncDirectory, oldName)
 		absoluteNew := utils.RelToAbsConvert(s.syncDirectory, newName)
 		log.Printf("[RENAME HANDLER] Old: %s New: %s\n", oldName, newName)
 
-		err = os.Rename(absoluteOld, absoluteNew)
+		err = s.handleRename(clientID, absoluteOld, absoluteNew)
 		if err != nil {
+			log.Printf("Error handling rename: %s\n", err)
 			http.Error(w, fmt.Sprintf("Error renaming, old: %s | new: %s", absoluteOld, absoluteNew), http.StatusInternalServerError)
 			return
 		}
@@ -191,6 +293,24 @@ func (s *Server) renameHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(response)
 	}
+}
+
+func (s *Server) handleRemove(clientID, absolutePath string) error {
+	if err := utils.Rm(absolutePath); err != nil {
+		return err
+	}
+
+	message := &Message{
+		ClientID: clientID,
+		Event:    "REMOVE",
+		Path:     utils.AbsToRelConvert(s.syncDirectory, absolutePath),
+	}
+
+	if err := s.publish(message); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Server) removeHandler(w http.ResponseWriter, r *http.Request) {
@@ -205,12 +325,14 @@ func (s *Server) removeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer r.Body.Close()
 
+		clientID := reqPayload.ClientID
 		path := reqPayload.Path
 		absolutePath := utils.RelToAbsConvert(s.syncDirectory, path)
 
 		log.Printf("[REMOVE HANDLER] To remove: %s\n", absolutePath)
-		err = os.RemoveAll(absolutePath)
+		err = s.handleRemove(clientID, absolutePath)
 		if err != nil {
+			log.Printf("Error handling remove %s\n", err)
 			http.Error(w, "Error removing", http.StatusInternalServerError)
 			return
 		}
@@ -272,6 +394,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Received snapshot from client: %+v\n", reqPayload.FinalSnapshot)
 
+		clientID := reqPayload.ClientID
 		clientSnapshot := reqPayload.FinalSnapshot
 
 		_, err = os.Stat(s.syncDirectory)
@@ -289,7 +412,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Server snapshot: %+v\n", serverSnapshot)
 
 		// Retrieve client actions by comparing snapshots
-		clientFileActions, err := s.processSnapshots(serverSnapshot, clientSnapshot)
+		clientFileActions, err := s.processSnapshots(serverSnapshot, clientSnapshot, clientID)
 		if err != nil {
 			log.Printf("Error processing client and server snapshots: %s", err)
 			http.Error(w, fmt.Sprintf("Error processing client and server snapshots: %s", err), http.StatusInternalServerError)
@@ -306,7 +429,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMetadata, error) {
+func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata, clientID) (*utils.SyncActionMetadata, error) {
 	fileActions := utils.SyncActionMetadata{
 		Files: make(map[string]utils.FileActionMetadata),
 	}
@@ -379,7 +502,7 @@ func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.Director
 					}
 					log.Printf("[PROCESS SNAPSHOTS] Removing file: %s\n", absolutePath)
 					// Deletes path or file
-					err := utils.Rm(absolutePath)
+					err := s.handleRemove(clientID, absolutePath)
 					if err != nil {
 						log.Printf("[PROCESS SNAPSHOTS] Error removing file: %s\n", err)
 						return nil, err
@@ -406,7 +529,7 @@ func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.Director
 						log.Printf("[PROCESS SNAPSHOTS]-[TOMBSTONE] Tie, removing file on server: %s\n", absolutePath)
 					}
 					// Deletes path or file
-					err := utils.Rm(absolutePath)
+					err := s.handleRemove(clientID, absolutePath)
 					if err != nil {
 						return nil, err
 					}
@@ -427,7 +550,10 @@ func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.Director
 			if clientFileMetadata.IsDirectory {
 				log.Printf("[PROCESS SNAPSHOTS] Directory exists only on client, creating on server: %s\n", path)
 				absolutePath := utils.RelToAbsConvert(s.syncDirectory, path)
-				utils.MkDir(absolutePath)
+				err = s.handleDirectory(clientID, absolutePath)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				log.Printf("[PROCESS SNAPSHOTS] File only exists on client, upload to server: %s\n", path)
 				fileActions.Files[path] = utils.FileActionMetadata{

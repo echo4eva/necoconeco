@@ -27,6 +27,7 @@ type PostSnapshotResponse struct {
 }
 
 type PostSnapshotRequest struct {
+	ClientID      string                   `json"client_id"`
 	FinalSnapshot *utils.DirectoryMetadata `json:"final_snapshot"`
 }
 
@@ -36,12 +37,14 @@ type UploadResponse struct {
 }
 
 type CreateDirectoryRequest struct {
+	ClientID  string `json:"client_id"`
 	Directory string `json:"directory"`
 }
 
 type RenameRequest struct {
-	OldName string `json:"old_name"`
-	NewName string `json:"new_name"`
+	ClientID string `json:"client_id"`
+	OldName  string `json:"old_name"`
+	NewName  string `json:"new_name"`
 }
 
 type UploadRequest struct {
@@ -49,7 +52,8 @@ type UploadRequest struct {
 }
 
 type RemoveRequest struct {
-	Path string `json:"path"`
+	ClientID string `json:"client_id"`
+	Path     string `json:"path"`
 }
 
 type Response struct {
@@ -158,10 +162,11 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 	return &uploadResponse, nil
 }
 
-func RemoteMkdir(directory, syncDirectory, serverURL string) error {
+func RemoteMkdir(directory, syncDirectory, serverURL, clientID string) error {
 	createDirectoryURL := fmt.Sprintf("http://%s/directory", serverURL)
 
 	payload := CreateDirectoryRequest{
+		ClientID:  clientID,
 		Directory: utils.AbsToRelConvert(syncDirectory, directory),
 	}
 
@@ -194,12 +199,13 @@ func RemoteMkdir(directory, syncDirectory, serverURL string) error {
 	return nil
 }
 
-func RemoteRename(oldName, newName, syncDirectory, serverURL string) error {
+func RemoteRename(oldName, newName, syncDirectory, serverURL, clientID string) error {
 	renameURL := fmt.Sprintf("http://%s/rename", serverURL)
 
 	payload := RenameRequest{
-		OldName: utils.AbsToRelConvert(syncDirectory, oldName),
-		NewName: utils.AbsToRelConvert(syncDirectory, newName),
+		ClientID: clientID,
+		OldName:  utils.AbsToRelConvert(syncDirectory, oldName),
+		NewName:  utils.AbsToRelConvert(syncDirectory, newName),
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -229,11 +235,12 @@ func RemoteRename(oldName, newName, syncDirectory, serverURL string) error {
 	return nil
 }
 
-func RemoteRemove(targetPath, syncDirectory, serverURL string) error {
+func RemoteRemove(targetPath, syncDirectory, serverURL, clientID string) error {
 	removeURL := fmt.Sprintf("http://%s/remove", serverURL)
 
 	payload := RemoveRequest{
-		Path: utils.AbsToRelConvert(syncDirectory, targetPath),
+		ClientID: clientID,
+		Path:     utils.AbsToRelConvert(syncDirectory, targetPath),
 	}
 
 	jsonData, err := json.Marshal(payload)
