@@ -36,6 +36,7 @@ func main() {
 
 	log.Printf("Starting sync client\n")
 
+	clientID = os.Getenv("CLIENT_ID")
 	address = os.Getenv("RABBITMQ_ADDRESS")
 	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
