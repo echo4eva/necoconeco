@@ -1,59 +1,56 @@
-# .github/workflows/ci.yml
-
-# A descriptive name for your workflow. This will show up in the Actions tab on GitHub.
 name: Necoconeco CI/CD
 
-# This section defines when the workflow will run.
 on:
-  # Triggers the workflow on push events for all branches.
   push:
-    branches: [ "**" ] # The "**" means it runs on every branch.
-  # Triggers the workflow when a pull request is opened or updated.
+    branches: [ "**" ]
   pull_request:
-    branches: [ "main" ] # Runs when a PR targets the main branch.
+    branches: [ "main" ]
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
-  # We'll define a single job called 'build-and-test'.
   build-and-test:
-    # This job will run on the latest version of an Ubuntu Linux runner provided by GitHub.
-    # This environment comes with Docker pre-installed, which is essential for Testcontainers.
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-      # Step 1: Check out your repository code so the workflow can access it.
       - name: Checkout repository code
         uses: actions/checkout@v4
 
-      # Step 2: Set up the Go programming environment.
       - name: Set up Go environment
         uses: actions/setup-go@v5
         with:
-          # Specify the version of Go you are using for your project.
           go-version: '1.23.8'
 
-      # Step 3: Tidy dependencies.
-      # This ensures your go.mod and go.sum files are up-to-date.
       - name: Tidy Go modules
         run: go mod tidy
 
-      # Step 4: Build your 'pubsub' client application.
-      # The '-tags pubsub' flag is crucial here. It tells the Go compiler to only
-      # include files with the '//go:build pubsub' tag, which is how you've structured your code.
       - name: Build  'client' application
         run: go build -v -tags client -o necoconeco-client .
 
-      # Step 5: Build your 'server' application.
-      # Similarly, this uses the 'server' build tag to compile your server code.
       - name: Build 'server' application
         run: go build -v -tags server -o necoconeco-server .
 
-      # Step 6: Run tests with Testcontainers.
-      # This is the key step for your testing.
-      # - 'go test -v ./...' runs all tests in your project.
-      # - When your tests initialize 'testcontainers-go', it will automatically find and use the
-      #   Docker daemon available on the GitHub runner to spin up the required containers.
-      # - No extra Docker setup is needed in this workflow file!
       - name: Run Go tests
         run: go test -v ./...
+
+  push-docker-image:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build-and-test
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Push Docker image to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./integration_test/server.Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/necoconeco-server:latest
