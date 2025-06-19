@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/echo4eva/necoconeco/internal/api"
@@ -45,7 +44,7 @@ func main() {
 	server.clientID = os.Getenv("CLIENT_ID")
 	server.syncDirectory = os.Getenv("SYNC_DIRECTORY")
 	address := os.Getenv("RABBITMQ_ADDRESS")
-	exchangeName := os.Getenv("RABBITMQ_EXHANGE_NAME")
+	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
 	routingKey := os.Getenv("RABBITMQ_ROUTING_KEY")
 
 	env := rmq.NewEnvironment(address, nil)
@@ -429,7 +428,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata, clientID) (*utils.SyncActionMetadata, error) {
+func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.DirectoryMetadata, clientID string) (*utils.SyncActionMetadata, error) {
 	fileActions := utils.SyncActionMetadata{
 		Files: make(map[string]utils.FileActionMetadata),
 	}
@@ -550,7 +549,7 @@ func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.Director
 			if clientFileMetadata.IsDirectory {
 				log.Printf("[PROCESS SNAPSHOTS] Directory exists only on client, creating on server: %s\n", path)
 				absolutePath := utils.RelToAbsConvert(s.syncDirectory, path)
-				err = s.handleDirectory(clientID, absolutePath)
+				err := s.handleDirectory(clientID, absolutePath)
 				if err != nil {
 					return nil, err
 				}

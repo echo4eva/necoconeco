@@ -1,5 +1,5 @@
-//go:build pubsub
-// +build pubsub
+//go:build client
+// +build client
 
 package main
 
@@ -149,10 +149,10 @@ func main() {
 	// If sync, the file server put messages in their queue that are redundant.
 	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
 	if err != nil {
-		log.Printf("[PUBSUB]-[PURGE]-[ERROR] %s\n", err)
+		log.Printf("[PURGE]-[ERROR] %s\n", err)
 		return
 	}
-	log.Printf("[PUBSUB] PURGING %d\n", purgedAmount)
+	log.Printf("PURGING %d\n", purgedAmount)
 
 	_, err = management.Bind(context.TODO(), &rmq.ExchangeToQueueBindingSpecification{
 		SourceExchange:   exchangeName,
@@ -505,7 +505,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					if err != nil {
 						log.Println(err)
 					}
-					publish(publisher, eventData.message)
+					// publish(publisher, eventData.message)
 				} else if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
 					api.RemoteMkdir(eventData.message.Path, syncDirectory, serverURL, clientID)
@@ -513,7 +513,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
 					}
-					publish(publisher, eventData.message)
+					// publish(publisher, eventData.message)
 				}
 			case "WRITE":
 				if strings.HasSuffix(eventData.path, ".md") {
@@ -540,7 +540,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if err != nil {
 					log.Println(err)
 				}
-				publish(publisher, eventData.message)
+				// publish(publisher, eventData.message)
 			case "REMOVE":
 				if processedFiles.isProcessed(eventData.path) {
 					log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
@@ -551,7 +551,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if err != nil {
 					log.Println(err)
 				}
-				publish(publisher, eventData.message)
+				// publish(publisher, eventData.message)
 			default:
 				log.Printf("Unexpected event occured: %s", eventData.event)
 			}

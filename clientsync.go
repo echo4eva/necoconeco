@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	clientID string
+	clientID      string
 	address       string
 	queueName     string
 	serverURL     string
@@ -146,7 +146,7 @@ func postSnapshot(finalSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMeta
 	log.Printf("Final snapshot to be sent to server: %+v\n", finalSnapshot)
 
 	payload := api.PostSnapshotRequest{
-		ClientID: client
+		ClientID:      clientID,
 		FinalSnapshot: finalSnapshot,
 	}
 

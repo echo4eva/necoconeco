@@ -66,6 +66,15 @@ func setupRabbitMQ(ctx context.Context, t *testing.T, netNetwork *testcontainers
 }
 
 func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontainers.DockerNetwork) testcontainers.Container {
+
+	env := map[string]string{
+		"CLIENT_ID":              "server-pub",
+		"SYNC_DIRECTORY":         "/app/storage",
+		"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
+		"RABBITMQ_EXCHANGE_NAME": "exchange",
+		"RABBITMQ_ROUTING_KEY":   "routing.key",
+	}
+
 	fileServerContainer, err := testcontainers.Run(
 		ctx,
 		"",
@@ -76,6 +85,7 @@ func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontaine
 			},
 		),
 		testcontainers.WithExposedPorts("8080/tcp"),
+		testcontainers.WithEnv(env),
 		network.WithNetwork([]string{"file-server"}, netNetwork),
 		testcontainers.WithLogConsumers(&TestLogConsumer{
 			prefix: "file-server",
@@ -257,12 +267,12 @@ func TestFileSyncBetweenClients(t *testing.T) {
 
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "t-client-1",
-		Dockerfile: "clientPubSub.Dockerfile",
+		Dockerfile: "clientOnly.Dockerfile",
 		QueueName:  "queue-1",
 	})
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "t-client-2",
-		Dockerfile: "clientPubSub.Dockerfile",
+		Dockerfile: "clientOnly.Dockerfile",
 		QueueName:  "queue-2",
 	})
 
@@ -355,12 +365,12 @@ func TestWriteDebouncerRemoval(t *testing.T) {
 
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "debouncer-pub",
-		Dockerfile: "clientPubSub.Dockerfile",
+		Dockerfile: "clientOnly.Dockerfile",
 		QueueName:  "debouncer-queue-1",
 	})
 	env.addClient(ctx, t, ClientConfig{
 		ID:         "debouncer-rec",
-		Dockerfile: "clientPubSub.Dockerfile",
+		Dockerfile: "clientOnly.Dockerfile",
 		QueueName:  "debouncer-queue-2",
 	})
 
@@ -470,4 +480,46 @@ func TestClientSyncNecoshot(t *testing.T) {
 	fo.assertFileContent(clientContainer, "/app/sync/client_lose_delete.md", "server win")
 	fo.assertDirectoryExists(clientContainer, "/app/sync/server_subdir")
 	fo.assertFileExists(clientContainer, "/app/sync/server_subdir/server.md")
+}
+
+func TestClientConsumingSync(t *testing.T) {
+	ctx := context.Background()
+
+	env := setupTestEnvironment(ctx, t)
+
+	fo := NewFileOps(t, ctx)
+
+	// Client A
+	// Is initially empty, as is in a the consuming state
+	env.addClient(ctx, t, ClientConfig{
+		ID:         "consuming-sync-client",
+		Dockerfile: "clientConsumingSync.Dockerfile",
+		QueueName:  "sync-queue-1",
+	})
+	consumingClient := env.Clients["consuming-sync-client"]
+
+	waitForSync()
+
+	// Client B
+	// Is filled with files needed to be synced
+	env.addClient(ctx, t, ClientConfig{
+		ID:         "syncing-client",
+		Dockerfile: "clientSync.Dockerfile",
+		QueueName:  "sync-queue-2",
+	})
+
+	// Client A should receive message from file server (publisher)
+	// As Client B syncs with the file server, the file server will be publishing messages to the queue
+	// NOTE: should see errors "failed to upload file" in logs, but that is expected
+	// because file server and client snapshots aren't in sync in this test,
+	// file server is fresh, client is "old."
+	waitForLongSync()
+
+	// Check if consuming client (Client A) has consumed syncing client (Client B)
+	// these files listed/ are listed in clientSync.Dockerfile
+	fo.assertDirectoryExists(consumingClient, "/app/sync/client_subdir")
+	fo.assertDirectoryExists(consumingClient, "/app/sync/client_empty_subdir")
+	fo.assertFileExists(consumingClient, "/app/sync/client_subdir/client_regular_upload.md")
+	fo.assertFileExists(consumingClient, "/app/sync/client_win_upload.md")
+	fo.assertFileExists(consumingClient, "/app/sync/client_tie_win.md")
 }

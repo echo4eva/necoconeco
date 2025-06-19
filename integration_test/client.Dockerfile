@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for clientsync + pubsub
+# Multi-stage Dockerfile for clientsync + client
 
 # Stage 1: Build clientsync
 FROM golang:1.23.8-alpine AS clientsync-builder
@@ -8,13 +8,13 @@ RUN go mod download
 COPY . .
 RUN go build -o clientsync ./clientsync.go
 
-# Stage 2: Build pubsub  
-FROM golang:1.23.8-alpine AS pubsub-builder
+# Stage 2: Build client
+FROM golang:1.23.8-alpine AS client-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o pubsub ./pubsub.go
+RUN go build -o client ./client.go
 
 # Stage 3: Final runtime image
 FROM alpine:latest
@@ -22,7 +22,7 @@ WORKDIR /app
 
 # Copy built executables from previous stages
 COPY --from=clientsync-builder /app/clientsync /app/clientsync
-COPY --from=pubsub-builder /app/pubsub /app/pubsub
+COPY --from=client-builder /app/client /app/client
 
 # Create sync directory
 RUN mkdir -p /app/sync
@@ -34,9 +34,9 @@ RUN echo '#!/bin/sh' > /app/entrypoint.sh && \
     echo 'echo "Starting necoconeco sync services..."' >> /app/entrypoint.sh && \
     echo '' >> /app/entrypoint.sh && \
     echo '# Start pubsub in background' >> /app/entrypoint.sh && \
-    echo 'echo "Starting pubsub service..."' >> /app/entrypoint.sh && \
-    echo '/app/pubsub &' >> /app/entrypoint.sh && \
-    echo 'PUBSUB_PID=$!' >> /app/entrypoint.sh && \
+    echo 'echo "Starting client service..."' >> /app/entrypoint.sh && \
+    echo '/app/client &' >> /app/entrypoint.sh && \
+    echo 'CLIENT_PID=$!' >> /app/entrypoint.sh && \
     echo '' >> /app/entrypoint.sh && \
     echo '# Start clientsync in background' >> /app/entrypoint.sh && \
     echo 'echo "Starting clientsync service..."' >> /app/entrypoint.sh && \
@@ -56,7 +56,7 @@ RUN echo '#!/bin/sh' > /app/entrypoint.sh && \
     echo 'trap cleanup SIGTERM SIGINT' >> /app/entrypoint.sh && \
     echo '' >> /app/entrypoint.sh && \
     echo 'echo "Both services started successfully."' >> /app/entrypoint.sh && \
-    echo 'echo "PubSub PID: $PUBSUB_PID"' >> /app/entrypoint.sh && \
+    echo 'echo "Client PID: $PUBSUB_PID"' >> /app/entrypoint.sh && \
     echo 'echo "ClientSync PID: $CLIENTSYNC_PID"' >> /app/entrypoint.sh && \
     echo '' >> /app/entrypoint.sh && \
     echo '# Wait for either process to exit' >> /app/entrypoint.sh && \
