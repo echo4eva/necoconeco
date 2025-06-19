@@ -98,47 +98,7 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 }
 
 func CreateDirectorySnapshot(syncDirectory string) error {
-	directoryMetadata := DirectoryMetadata{
-		Files: make(map[string]FileMetadata),
-	}
-
-	err := filepath.WalkDir(syncDirectory, func(path string, d fs.DirEntry, err error) error {
-		fileInfo, err := d.Info()
-		if err != nil {
-			log.Printf("Error getting file info")
-			return err
-		}
-		lastModified := fileInfo.ModTime().Format(TimeFormat)
-		relativePath := AbsToRelConvert(syncDirectory, path)
-
-		// Debug
-		fmt.Printf("[DEBUG] path: %s | relative path: %s\n", path, relativePath)
-
-		// if its a file, access its contents
-		if !d.IsDir() {
-			fileContent, err := os.ReadFile(path)
-			if err != nil {
-				fmt.Printf("Error reading file %s", path)
-				return err
-			}
-			sum := sha256.Sum256(fileContent)
-			contentHash := hex.EncodeToString(sum[:])
-			directoryMetadata.Files[relativePath] = FileMetadata{
-				LastModified: lastModified,
-				ContentHash:  contentHash,
-				Status:       StatusExists,
-			}
-		} else {
-			if relativePath != "." {
-				directoryMetadata.Files[relativePath] = FileMetadata{
-					LastModified: lastModified,
-					Status:       StatusExists,
-					IsDirectory:  true,
-				}
-			}
-		}
-		return nil
-	})
+	directoryMetadata, err := GetLocalMetadata(syncDirectory)
 	if err != nil {
 		return err
 	}
@@ -176,7 +136,7 @@ func GetLastSnapshot(syncDirectory string) (*DirectoryMetadata, bool, error) {
 	}
 
 	var snapshot DirectoryMetadata
-	json.Unmarshal(jsonData, &snapshot)
+	err = json.Unmarshal(jsonData, &snapshot)
 	if err != nil {
 		return nil, false, fmt.Errorf("Failed to unmarshal json data: %s\n", err)
 	}
