@@ -103,7 +103,7 @@ func setupClient(ctx context.Context, t *testing.T, netNetwork *testcontainers.D
 		"RABBITMQ_QUEUE_NAME":    config.QueueName,
 		"RABBITMQ_ROUTING_KEY":   "routing.key",
 		"SYNC_DIRECTORY":         "/app/sync",
-		"SYNC_SERVER_URL":        "file-server:8080",
+		"SYNC_SERVER_URL":        "http://file-server:8080",
 	}
 
 	container, err := testcontainers.Run(

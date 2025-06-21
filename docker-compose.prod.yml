@@ -15,22 +15,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 10s
-  container-1:
-    build:
-      context: .
-      dockerfile: integration_test/client.Dockerfile
-    container_name: container-1
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      - CLIENT_ID=t-client-1
-      - RABBITMQ_ADDRESS=amqp://kappa:chungus@rabbitmq:5672/
-      - RABBITMQ_EXCHANGE_NAME=neco
-      - RABBITMQ_QUEUE_NAME=t-queue-1
-      - RABBITMQ_ROUTING_KEY=kappa.penis
-      - SYNC_DIRECTORY=/app/sync
-      - SYNC_SERVER_URL=file-server:8080
   file-server:
     build:
       context: .

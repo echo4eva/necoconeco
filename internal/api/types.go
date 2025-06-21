@@ -74,7 +74,7 @@ func Download(relativePath, syncDirectory, serverURL string) error {
 	defer out.Close()
 
 	// Download from file-server
-	downloadURL := fmt.Sprintf("http://%s/files/%s", serverURL, relativePath)
+	downloadURL := fmt.Sprintf("%s/files/%s", serverURL, relativePath)
 	resp, err := http.Get(downloadURL)
 	if err != nil {
 		return err
@@ -131,7 +131,7 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 		return nil, fmt.Errorf("Failed to close multipart writer %w", err)
 	}
 
-	uploadURL := fmt.Sprintf("http://%s/upload", serverURL)
+	uploadURL := fmt.Sprintf("%s/upload", serverURL)
 	request, err := http.NewRequest("POST", uploadURL, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create request %w", err)
@@ -163,7 +163,7 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 }
 
 func RemoteMkdir(directory, syncDirectory, serverURL, clientID string) error {
-	createDirectoryURL := fmt.Sprintf("http://%s/directory", serverURL)
+	createDirectoryURL := fmt.Sprintf("%s/directory", serverURL)
 
 	payload := CreateDirectoryRequest{
 		ClientID:  clientID,
@@ -200,7 +200,7 @@ func RemoteMkdir(directory, syncDirectory, serverURL, clientID string) error {
 }
 
 func RemoteRename(oldName, newName, syncDirectory, serverURL, clientID string) error {
-	renameURL := fmt.Sprintf("http://%s/rename", serverURL)
+	renameURL := fmt.Sprintf("%s/rename", serverURL)
 
 	payload := RenameRequest{
 		ClientID: clientID,
@@ -236,7 +236,7 @@ func RemoteRename(oldName, newName, syncDirectory, serverURL, clientID string) e
 }
 
 func RemoteRemove(targetPath, syncDirectory, serverURL, clientID string) error {
-	removeURL := fmt.Sprintf("http://%s/remove", serverURL)
+	removeURL := fmt.Sprintf("%s/remove", serverURL)
 
 	payload := RemoveRequest{
 		ClientID: clientID,

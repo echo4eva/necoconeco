@@ -173,7 +173,12 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileURL := fmt.Sprintf("http://%s/files/%s", r.Host, relativePath)
+	// Construct file URL with proper protocol based on request
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	fileURL := fmt.Sprintf("%s://%s/files/%s", scheme, r.Host, relativePath)
 
 	err = s.handleUpload(clientID, relativePath)
 	if err != nil {

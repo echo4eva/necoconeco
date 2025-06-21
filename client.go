@@ -396,9 +396,9 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 				// For testing with docker containers
 				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
 				if strings.Contains(message.FileURL, "localhost") && !strings.Contains(serverURL, "localhost") {
-					message.FileURL = fmt.Sprintf("http://%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
+					message.FileURL = fmt.Sprintf("%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
 				} else if strings.Contains(message.FileURL, "file-server") && strings.Contains(serverURL, "localhost") {
-					message.FileURL = fmt.Sprintf("http://%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
+					message.FileURL = fmt.Sprintf("%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
 				}
 
 				if message.ClientID == clientID {

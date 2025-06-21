@@ -142,7 +142,7 @@ func processSnapshots(lastSnapshot, currentSnapshot *utils.DirectoryMetadata) *u
 
 func postSnapshot(finalSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMetadata, error) {
 	log.Println("Posting snapshot to server")
-	postURL := fmt.Sprintf("http://%s/snapshot", serverURL)
+	postURL := fmt.Sprintf("%s/snapshot", serverURL)
 	log.Printf("Final snapshot to be sent to server: %+v\n", finalSnapshot)
 
 	payload := api.PostSnapshotRequest{
