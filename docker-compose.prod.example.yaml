@@ -19,7 +19,7 @@ services:
   file-server:
     image: cookyves/necoconeco-server:latest
     container_name: file-server
-    labels
+    labels:
       - "com.centurylinklabs.watchtower.enable=true"
     restart: unless-stopped
     ports:
