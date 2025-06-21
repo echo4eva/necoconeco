@@ -46,6 +46,7 @@ func main() {
 	address := os.Getenv("RABBITMQ_ADDRESS")
 	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
 	routingKey := os.Getenv("RABBITMQ_ROUTING_KEY")
+	port := os.Getenv("PORT")
 
 	env := rmq.NewEnvironment(address, nil)
 	defer env.CloseConnections(context.Background())
@@ -89,8 +90,8 @@ func main() {
 	http.HandleFunc("/metadata", server.metadataHandler)
 	http.HandleFunc("/snapshot", server.snapshotHandler)
 
-	fmt.Println("Server started at :8080")
-	err = http.ListenAndServe("0.0.0.0:8080", nil)
+	fmt.Printf("Server started at :%s\n", port)
+	err = http.ListenAndServe(fmt.Sprintf(":%s", port), nil)
 	if err != nil {
 		fmt.Println("someshit happened %w", err)
 	}

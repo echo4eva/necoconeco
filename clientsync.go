@@ -150,31 +150,41 @@ func postSnapshot(finalSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMeta
 		FinalSnapshot: finalSnapshot,
 	}
 
+	log.Printf("Payload to be sent to server: %+v\n", payload)
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
+		log.Printf("Failed to marshal snapshot: %s", err)
 		return nil, err
 	}
 
+	log.Printf("JSON data to be sent to server: %s\n", string(jsonData))
 	req, err := http.NewRequest(http.MethodPost, postURL, bytes.NewBuffer(jsonData))
 	if err != nil {
+		log.Printf("Failed to create request: %s", err)
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
+	log.Printf("Request to be sent to server: %+v\n", req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Printf("Failed to do request: %s", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
+	log.Printf("Response from server: %+v\n", resp)
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("Failed to read response body: %s", err)
 		return nil, err
 	}
 
 	var response api.PostSnapshotResponse
+	log.Printf("Body bytes to be unmarshalled: %s\n", string(bodyBytes))
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
+		log.Printf("Failed to unmarshal response: %s", err)
 		return nil, err
 	}
 
