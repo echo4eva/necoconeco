@@ -73,6 +73,7 @@ func setupFileServer(ctx context.Context, t *testing.T, netNetwork *testcontaine
 		"RABBITMQ_ADDRESS":       "amqp://guest:guest@rabbitmq:5672/",
 		"RABBITMQ_EXCHANGE_NAME": "exchange",
 		"RABBITMQ_ROUTING_KEY":   "routing.key",
+		"PORT":                   "8080",
 	}
 
 	fileServerContainer, err := testcontainers.Run(
