@@ -19,18 +19,24 @@ services:
   file-server:
     image: cookyves/necoconeco-server:latest
     container_name: file-server
+    labels
+      - "com.centurylinklabs.watchtower.enable=true"
     restart: unless-stopped
+    ports:
+      - "8080:8080"
     depends_on:
       rabbitmq:
         condition: service_healthy
     volumes:
       - ./storage:/app/storage
+    # use this or env 
     environment:
       - CLIENT_ID=server-pub
       - SYNC_DIRECTORY=/app/storage
       - RABBITMQ_ADDRESS=amqp://kappa:chungus@rabbitmq:5672/
       - RABBITMQ_EXCHANGE_NAME=neco
       - RABBITMQ_ROUTING_KEY=kappa.penis
+      - PORT=8080
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower-prod
@@ -38,6 +44,6 @@ services:
     volumes:
       # Watchtower needs this to interact with the Docker daemon on your VPS
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 # Check for new images every 5 minutes
+    command: --interval 300 --label-enable # Check for new images every 5 minutes, only for labeled containers
 volumes:
   rabbitmq-data:

@@ -179,6 +179,12 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		scheme = "https"
 	}
+
+	// Check for X-Forwarded-Proto header (set by reverse proxies like nginx)
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+		scheme = "https"
+	}
+
 	fileURL := fmt.Sprintf("%s://%s/files/%s", scheme, r.Host, relativePath)
 
 	err = s.handleUpload(clientID, relativePath)
