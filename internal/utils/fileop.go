@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -25,7 +26,8 @@ const (
 	ActionDownload FileAction = "download"
 	ActionMkdir    FileAction = "mkdir"
 
-	TimeFormat string = time.RFC3339
+	TimeFormat        string = time.RFC3339
+	MarkdownExtension string = ".md"
 )
 
 type FileMetadata struct {
@@ -66,21 +68,23 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 
 		// if its a file, access its contents
 		if !d.IsDir() {
-			fileContent, err := os.ReadFile(path)
-			if err != nil {
-				fmt.Printf("Error reading file %s", path)
-				return err
-			}
-			sum := sha256.Sum256(fileContent)
-			contentHash := hex.EncodeToString(sum[:])
-			directoryMetadata.Files[relativePath] = FileMetadata{
-				LastModified: lastModified,
-				ContentHash:  contentHash,
-				Status:       StatusExists,
-				IsDirectory:  false,
+			if strings.HasSuffix(relativePath, MarkdownExtension) {
+				fileContent, err := os.ReadFile(path)
+				if err != nil {
+					fmt.Printf("Error reading file %s", path)
+					return err
+				}
+				sum := sha256.Sum256(fileContent)
+				contentHash := hex.EncodeToString(sum[:])
+				directoryMetadata.Files[relativePath] = FileMetadata{
+					LastModified: lastModified,
+					ContentHash:  contentHash,
+					Status:       StatusExists,
+					IsDirectory:  false,
+				}
 			}
 		} else {
-			if relativePath != "." {
+			if relativePath != "." && relativePath != HiddenDirectoryName {
 				directoryMetadata.Files[relativePath] = FileMetadata{
 					LastModified: lastModified,
 					Status:       StatusExists,

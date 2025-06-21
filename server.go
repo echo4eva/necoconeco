@@ -178,13 +178,19 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
+		log.Printf("[DEBUG] TLS detected directly: %v", r.TLS != nil)
 	}
 
 	// Check for X-Forwarded-Proto header (set by reverse proxies like nginx)
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+	forwardedProto := r.Header.Get("X-Forwarded-Proto")
+	log.Printf("[DEBUG] X-Forwarded-Proto header: '%s'", forwardedProto)
+	log.Printf("[DEBUG] All headers: %+v", r.Header)
+
+	if forwardedProto == "https" {
 		scheme = "https"
 	}
 
+	log.Printf("[DEBUG] Final scheme: %s, Host: %s", scheme, r.Host)
 	fileURL := fmt.Sprintf("%s://%s/files/%s", scheme, r.Host, relativePath)
 
 	err = s.handleUpload(clientID, relativePath)
