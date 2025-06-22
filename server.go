@@ -178,19 +178,14 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
-		log.Printf("[DEBUG] TLS detected directly: %v", r.TLS != nil)
 	}
 
 	// Check for X-Forwarded-Proto header (set by reverse proxies like nginx)
 	forwardedProto := r.Header.Get("X-Forwarded-Proto")
-	log.Printf("[DEBUG] X-Forwarded-Proto header: '%s'", forwardedProto)
-	log.Printf("[DEBUG] All headers: %+v", r.Header)
-
 	if forwardedProto == "https" {
 		scheme = "https"
 	}
 
-	log.Printf("[DEBUG] Final scheme: %s, Host: %s", scheme, r.Host)
 	fileURL := fmt.Sprintf("%s://%s/files/%s", scheme, r.Host, relativePath)
 
 	err = s.handleUpload(clientID, relativePath)
@@ -467,6 +462,7 @@ func (s *Server) processSnapshots(serverSnapshot, clientSnapshot *utils.Director
 	}
 
 	for _, path := range allPaths {
+
 		serverFileMetadata, existsOnServer := serverSnapshot.Files[path]
 		clientFileMetadata, existsOnClient := clientSnapshot.Files[path]
 
