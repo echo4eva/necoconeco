@@ -30,6 +30,44 @@ const (
 	MarkdownExtension string = ".md"
 )
 
+// Excluded directories that should not be processed
+var excludedDirectories = map[string]bool{
+	".":                 true,
+	HiddenDirectoryName: true,
+	".obsidian":         true,
+	".trash":            true,
+}
+
+// NormalizePath converts all path separators to forward slashes for cross-platform compatibility
+func NormalizePath(path string) string {
+	return filepath.ToSlash(path)
+}
+
+// DenormalizePath converts forward slashes back to the OS-specific path separator
+func DenormalizePath(path string) string {
+	return filepath.FromSlash(path)
+}
+
+func isExcludedDirectory(relativePath string) bool {
+	// Check for exact match first
+	if excludedDirectories[relativePath] {
+		return true
+	}
+
+	// Check if the path has any excluded directory as a prefix
+	for excludedDir := range excludedDirectories {
+		if excludedDir == "." {
+			continue // Skip the current directory check for prefix matching
+		}
+
+		if strings.HasPrefix(relativePath, excludedDir) {
+			return true
+		}
+	}
+
+	return false
+}
+
 type FileMetadata struct {
 	LastModified string `json:"last_modified"`
 	ContentHash  string `json:"content_hash,omitempty"`
@@ -66,6 +104,11 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 		// Debug
 		fmt.Printf("[DEBUG] path: %s | relative path: %s\n", path, relativePath)
 
+		// Skip if this path is in an excluded directory
+		if isExcludedDirectory(relativePath) {
+			return nil
+		}
+
 		// if its a file, access its contents
 		if !d.IsDir() {
 			if strings.HasSuffix(relativePath, MarkdownExtension) {
@@ -84,12 +127,10 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 				}
 			}
 		} else {
-			if relativePath != "." && relativePath != HiddenDirectoryName {
-				directoryMetadata.Files[relativePath] = FileMetadata{
-					LastModified: lastModified,
-					Status:       StatusExists,
-					IsDirectory:  true,
-				}
+			directoryMetadata.Files[relativePath] = FileMetadata{
+				LastModified: lastModified,
+				Status:       StatusExists,
+				IsDirectory:  true,
 			}
 		}
 		return nil
@@ -153,12 +194,15 @@ func IsTrueHash(localHash, trueHash string) bool {
 }
 
 func RelToAbsConvert(syncDirectory, relativePath string) string {
-	absolutePath := filepath.Join(syncDirectory, relativePath)
+	// Denormalize the path for proper file operations on the current OS
+	denormalizedPath := DenormalizePath(relativePath)
+	absolutePath := filepath.Join(syncDirectory, denormalizedPath)
 	return absolutePath
 }
 
 func AbsToRelConvert(syncDirectory, absolutePath string) string {
 	relativePath, _ := filepath.Rel(syncDirectory, absolutePath)
+	relativePath = NormalizePath(relativePath)
 	return relativePath
 }
 

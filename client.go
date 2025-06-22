@@ -342,9 +342,6 @@ func download(message Message) error {
 func publish(publisher *rmq.Publisher, message *Message) {
 	message.Path = utils.AbsToRelConvert(syncDirectory, message.Path)
 	message.OldPath = utils.AbsToRelConvert(syncDirectory, message.OldPath)
-	if strings.Contains(message.Path, "\\") {
-		message.Path = uncursing(message.Path)
-	}
 
 	jsonData, err := json.Marshal(message)
 	if err != nil {
@@ -389,9 +386,8 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 
 				var message Message
 				json.Unmarshal(deliveryContext.Message().GetData(), &message)
-				if strings.Contains(message.Path, "/") && strings.Contains(syncDirectory, "\\") {
-					message.Path = cursing(message.Path)
-				}
+				// message.Path is already normalized since it's sent from the server
+				// message.Path = utils.DenormalizePath(message.Path)
 
 				// For testing with docker containers
 				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
