@@ -146,6 +146,7 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	file, _, err := r.FormFile("file")
 	if err != nil {
+		log.Printf("[UPLOAD HANDLER] Error retrieving file: %s\n", err)
 		http.Error(w, "Error retrieving file", http.StatusBadRequest)
 		return
 	}
@@ -154,11 +155,13 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 	absolutePath := utils.RelToAbsConvert(s.syncDirectory, relativePath)
 	directory := utils.GetOnlyDir(absolutePath)
 	if err := utils.MkDir(directory); err != nil {
+		log.Printf("[UPLOAD HANDLER] Error creating directory: %s\n", err)
 		http.Error(w, "Error creating directory", http.StatusInternalServerError)
 		return
 	}
 	dst, err := os.Create(absolutePath)
 	if err != nil {
+		log.Printf("[UPLOAD HANDLER] Error creating file: %s\n", err)
 		http.Error(w, "Error creating file", http.StatusInternalServerError)
 		return
 	}
@@ -166,6 +169,7 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, err = io.Copy(dst, file)
 	if err != nil {
+		log.Printf("[UPLOAD HANDLER] Error saving file: %s\n", err)
 		http.Error(w, "Error saving file", http.StatusInternalServerError)
 		return
 	}
@@ -395,6 +399,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 
 		err := json.NewDecoder(r.Body).Decode(&reqPayload)
 		if err != nil {
+			log.Printf("[SNAPSHOT HANDLER] Error decoding json: %s\n", err)
 			http.Error(w, "Error decoding json", http.StatusBadRequest)
 			return
 		}
@@ -407,6 +412,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 
 		_, err = os.Stat(s.syncDirectory)
 		if err != nil {
+			log.Printf("[SNAPSHOT HANDLER] Error sync directory not initialized: %s\n", err)
 			http.Error(w, "Error sync directory not initialized", http.StatusInternalServerError)
 			return
 		}
@@ -414,6 +420,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 		var serverSnapshot *utils.DirectoryMetadata
 		serverSnapshot, err = s.fileManager.GetLocalMetadata()
 		if err != nil {
+			log.Printf("[SNAPSHOT HANDLER] Error retrieving server local metadata: %s\n", err)
 			http.Error(w, fmt.Sprintf("Error retrieving server local metadata: %s", err), http.StatusInternalServerError)
 			return
 		}
@@ -422,11 +429,10 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 		// Retrieve client actions by comparing snapshots
 		clientFileActions, err := s.processSnapshots(serverSnapshot, clientSnapshot, clientID)
 		if err != nil {
-			log.Printf("Error processing client and server snapshots: %s", err)
+			log.Printf("[SNAPSHOT HANDLER] Error processing client and server snapshots: %s\n", err)
 			http.Error(w, fmt.Sprintf("Error processing client and server snapshots: %s", err), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Client file actions: %+v\n", clientFileActions)
 
 		response.SyncActionMetadata = clientFileActions
 		response.Status = http.StatusOK
