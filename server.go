@@ -38,6 +38,13 @@ func main() {
 
 	server.clientID = os.Getenv("CLIENT_ID")
 	server.syncDirectory = os.Getenv("SYNC_DIRECTORY")
+
+	// Ensure sync directory exists
+	if err := utils.MkDir(server.syncDirectory); err != nil {
+		log.Fatalf("Failed to create sync directory %s: %v", server.syncDirectory, err)
+	}
+	log.Printf("Using sync directory: %s", server.syncDirectory)
+
 	server.fileManager = utils.NewFileManager(server.syncDirectory)
 	address := os.Getenv("RABBITMQ_ADDRESS")
 	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
