@@ -83,7 +83,7 @@ func main() {
 	}
 	defer server.publisher.Close(context.Background())
 
-	fs := http.FileServer(http.Dir("./storage"))
+	fs := http.FileServer(http.Dir(server.syncDirectory))
 	http.Handle("/files/", http.StripPrefix("/files/", fs))
 
 	http.HandleFunc("/upload", server.uploadHandler)
