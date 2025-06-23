@@ -22,6 +22,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	fm := utils.NewFileManager(syncDir)
+
 	// Check if directory exists
 	if _, err := os.Stat(syncDir); os.IsNotExist(err) {
 		log.Fatalf("Directory does not exist: %s", syncDir)
@@ -29,7 +31,7 @@ func main() {
 
 	// Generate the snapshot
 	fmt.Printf("Generating necoshot.json for directory: %s\n", syncDir)
-	err := utils.CreateDirectorySnapshot(syncDir)
+	err := fm.CreateDirectorySnapshot()
 	if err != nil {
 		log.Fatalf("Failed to create directory snapshot: %v", err)
 	}

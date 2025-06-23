@@ -26,6 +26,8 @@ var (
 	queueName     string
 	serverURL     string
 	syncDirectory string
+	apiClient     *api.API
+	fileManager   *utils.FileManager
 )
 
 func main() {
@@ -41,6 +43,10 @@ func main() {
 	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
 	syncDirectory = os.Getenv("SYNC_DIRECTORY")
+
+	// Initialize service objects
+	apiClient = api.NewAPI(serverURL, syncDirectory)
+	fileManager = utils.NewFileManager(syncDirectory)
 
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
@@ -76,7 +82,7 @@ func main() {
 
 	// Grab last snapshot if possible
 	log.Println("Getting last snapshot")
-	lastSnapshot, exists, err := utils.GetLastSnapshot(syncDirectory)
+	lastSnapshot, exists, err := fileManager.GetLastSnapshot()
 	if err != nil {
 		log.Println(err)
 	}
@@ -84,7 +90,7 @@ func main() {
 
 	// Start of sync
 	log.Println("Getting local metadata/current snapshot")
-	currentSnapshot, err := utils.GetLocalMetadata(syncDirectory)
+	currentSnapshot, err := fileManager.GetLocalMetadata()
 	if err != nil {
 		log.Println(err)
 		return
@@ -193,50 +199,48 @@ func processActions(syncActionMetadata *utils.SyncActionMetadata) {
 	}
 
 	// Iterate through all file actions
-	for relativePath, fileActionMetadata := range syncActionMetadata.Files {
-		log.Printf("Processing action %s for file: %s", fileActionMetadata.Action, relativePath)
+	for normalizedPath, fileActionMetadata := range syncActionMetadata.Files {
+		log.Printf("Processing action %s for file: %s", fileActionMetadata.Action, normalizedPath)
 
 		switch fileActionMetadata.Action {
 		case utils.ActionUpload:
-			// Upload file to server
-			absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
+			// Upload file to server using denormalized (absolute) path
+			// The API client will handle path conversion internally
+			denormalizedPath := utils.RelToAbsConvert(syncDirectory, normalizedPath)
 
-			// Create fields map for upload
-			fields := map[string]string{
-				"path": relativePath,
-			}
-
-			uploadResponse, err := api.Upload(fields, absolutePath, serverURL)
+			uploadResponse, err := apiClient.Upload(denormalizedPath, clientID)
 			if err != nil {
-				log.Printf("Failed to upload %s: %s", relativePath, err)
+				log.Printf("Failed to upload %s: %s", normalizedPath, err)
 			} else {
-				log.Printf("Successfully uploaded %s, FileURL: %s", relativePath, uploadResponse.FileURL)
+				log.Printf("Successfully uploaded %s, FileURL: %s", normalizedPath, uploadResponse.FileURL)
 			}
 
 		case utils.ActionDownload:
-			// Download file from server
-			err := api.Download(relativePath, syncDirectory, serverURL)
+			// Download file from server using normalized (relative) path
+			// The API client will handle path conversion internally
+			err := apiClient.Download(normalizedPath)
 			if err != nil {
-				log.Printf("Failed to download %s: %s", relativePath, err)
+				log.Printf("Failed to download %s: %s", normalizedPath, err)
 			} else {
-				log.Printf("Successfully downloaded %s", relativePath)
+				log.Printf("Successfully downloaded %s", normalizedPath)
 			}
 		case utils.ActionMkdir:
-			absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
-			err := utils.MkDir(absolutePath)
+			// Create directory locally using denormalized (absolute) path
+			denormalizedPath := utils.RelToAbsConvert(syncDirectory, normalizedPath)
+			err := utils.MkDir(denormalizedPath)
 			if err != nil {
-				log.Printf("Failed to create directory %s: %s", relativePath, err)
+				log.Printf("Failed to create directory %s: %s", normalizedPath, err)
 			} else {
-				log.Printf("Successfully created directory %s", relativePath)
+				log.Printf("Successfully created directory %s", normalizedPath)
 			}
 		default:
-			log.Printf("Unknown action: %s for file: %s", fileActionMetadata.Action, relativePath)
+			log.Printf("Unknown action: %s for file: %s", fileActionMetadata.Action, normalizedPath)
 		}
 	}
 
 	// After processing all actions, create a new snapshot
 	log.Println("Creating new snapshot")
-	err := utils.CreateDirectorySnapshot(syncDirectory)
+	err := fileManager.CreateDirectorySnapshot()
 	if err != nil {
 		log.Printf("Failed to create snapshot after sync: %s", err)
 	} else {

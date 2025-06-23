@@ -19,18 +19,13 @@ import (
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 )
 
-type Message struct {
-	ClientID string `json:"client_id"`
-	Event    string `json:"event"`
-	Path     string `json:"path"`
-	FileURL  string `json:"file_url"`
-	OldPath  string `json:"old_path,omitempty"`
-}
+// Message struct moved to internal/api package
 
 type Server struct {
 	publisher     *rmq.Publisher
 	syncDirectory string
 	clientID      string
+	fileManager   *utils.FileManager
 }
 
 func main() {
@@ -43,6 +38,7 @@ func main() {
 
 	server.clientID = os.Getenv("CLIENT_ID")
 	server.syncDirectory = os.Getenv("SYNC_DIRECTORY")
+	server.fileManager = utils.NewFileManager(server.syncDirectory)
 	address := os.Getenv("RABBITMQ_ADDRESS")
 	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
 	routingKey := os.Getenv("RABBITMQ_ROUTING_KEY")
@@ -97,7 +93,7 @@ func main() {
 	}
 }
 
-func (s *Server) publish(message *Message) error {
+func (s *Server) publish(message *api.Message) error {
 	jsonData, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -123,7 +119,7 @@ func (s *Server) publish(message *Message) error {
 }
 
 func (s *Server) handleUpload(clientID, path string) error {
-	message := &Message{
+	message := &api.Message{
 		ClientID: clientID,
 		Event:    "CREATE",
 		Path:     path,
@@ -209,7 +205,7 @@ func (s *Server) handleDirectory(clientID, absolutePath string) error {
 		return err
 	}
 
-	message := &Message{
+	message := &api.Message{
 		ClientID: clientID,
 		Event:    "CREATE",
 		Path:     utils.AbsToRelConvert(s.syncDirectory, absolutePath),
@@ -259,7 +255,7 @@ func (s *Server) handleRename(clientID, oldName, newName string) error {
 		return err
 	}
 
-	message := &Message{
+	message := &api.Message{
 		ClientID: clientID,
 		Event:    "NECO_RENAME",
 		Path:     utils.AbsToRelConvert(s.syncDirectory, newName),
@@ -312,7 +308,7 @@ func (s *Server) handleRemove(clientID, absolutePath string) error {
 		return err
 	}
 
-	message := &Message{
+	message := &api.Message{
 		ClientID: clientID,
 		Event:    "REMOVE",
 		Path:     utils.AbsToRelConvert(s.syncDirectory, absolutePath),
@@ -372,7 +368,7 @@ func (s *Server) metadataHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var localMetadata *utils.DirectoryMetadata
-		localMetadata, err = utils.GetLocalMetadata(s.syncDirectory)
+		localMetadata, err = s.fileManager.GetLocalMetadata()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("%s", err), http.StatusInternalServerError)
 			return
@@ -416,7 +412,7 @@ func (s *Server) snapshotHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var serverSnapshot *utils.DirectoryMetadata
-		serverSnapshot, err = utils.GetLocalMetadata(s.syncDirectory)
+		serverSnapshot, err = s.fileManager.GetLocalMetadata()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error retrieving server local metadata: %s", err), http.StatusInternalServerError)
 			return

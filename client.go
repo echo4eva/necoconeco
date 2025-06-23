@@ -26,14 +26,14 @@ import (
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 )
 
-type Message struct {
-	ClientID string `json:"client_id"`
-	Event    string `json:"event"`
-	Path     string `json:"path"`
-	FileURL  string `json:"file_url"`
-	OldPath  string `json:"old_path"`
+type Client struct {
+	ID            string
+	syncDirectory string
+	apiClient     *api.API
+	fileManager   *utils.FileManager
 }
 
+// Message struct moved to internal/api package
 type FileStat struct {
 	event        string
 	fromSource   bool
@@ -60,25 +60,18 @@ type WriteDebouncer struct {
 
 type EventData struct {
 	path      string
+	oldPath   string
 	event     string
 	timestamp time.Time
-	message   *Message
 }
 
 type EventProcessor struct {
-	// mutex      sync.Mutex
-	// fileEvents map[string]EventData
 	fileEvents chan EventData
 }
 
 var (
-	clientID       string
-	exchangeName   string
-	queueName      string
-	routingKey     string
-	syncDirectory  string
-	address        string
 	serverURL      string
+	client         *Client
 	processedFiles *ProcessedFiles
 	eventProcessor *EventProcessor
 	writeDebouncer *WriteDebouncer
@@ -91,26 +84,26 @@ func main() {
 		log.Println("No .env file found, using system environment variables")
 	}
 
-	clientID = os.Getenv("CLIENT_ID")
-	address = os.Getenv("RABBITMQ_ADDRESS")
-	exchangeName = os.Getenv("RABBITMQ_EXCHANGE_NAME")
-	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
-	routingKey = os.Getenv("RABBITMQ_ROUTING_KEY")
-	syncDirectory = os.Getenv("SYNC_DIRECTORY")
+	// Get environment variables
+	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
+	queueName := os.Getenv("RABBITMQ_QUEUE_NAME")
+	routingKey := os.Getenv("RABBITMQ_ROUTING_KEY")
+	address := os.Getenv("RABBITMQ_ADDRESS")
 	serverURL = os.Getenv("SYNC_SERVER_URL")
+
+	// Initialize client struct with environment variables
+	client = &Client{
+		ID:            os.Getenv("CLIENT_ID"),
+		syncDirectory: os.Getenv("SYNC_DIRECTORY"),
+	}
+
+	// Initialize other components
 	processedFiles = NewProcessFiles()
 	eventProcessor = NewEventProcessor()
 	writeDebouncer = NewWriteDebouncer()
 	ignoreEvents = NewIgnoreEvents()
-
-	// Debug
-	log.Printf("CLIENT ID: %s", clientID)
-	log.Printf("ADDRESS: %s", address)
-	log.Printf("EXCHANGE NAME: %s", exchangeName)
-	log.Printf("QUEUE NAME: %s", queueName)
-	log.Printf("ROUTING KEY: %s", routingKey)
-	log.Printf("SYNC DIRECTORY: %s", syncDirectory)
-	log.Printf("SERVER URL: %s", serverURL)
+	client.apiClient = api.NewAPI(os.Getenv("SYNC_SERVER_URL"), client.syncDirectory)
+	client.fileManager = utils.NewFileManager(client.syncDirectory)
 
 	// Setup RabbitMQ client
 	env := rmq.NewEnvironment(address, nil)
@@ -164,17 +157,6 @@ func main() {
 		return
 	}
 
-	// Setup RabbitMQ publisher and publish message
-	publisher, err := amqpConnection.NewPublisher(context.Background(), &rmq.ExchangeAddress{
-		Exchange: exchangeName,
-		Key:      routingKey,
-	}, nil)
-	if err != nil {
-		rmq.Error("Failed to create new publisher", err)
-		return
-	}
-	defer publisher.Close(context.Background())
-
 	// Setup persistent RabbitMQ consumer
 	consumer, err := amqpConnection.NewConsumer(context.Background(), queueName, nil)
 	if err != nil {
@@ -193,19 +175,19 @@ func main() {
 	defer watcher.Close()
 
 	consume(consumer, consumerContext, watcher)
-	watch(watcher, publisher)
+	watch(watcher)
 
 	// Print working directory for debugging
 	currentDir, _ := os.Getwd()
 	log.Printf("Current working directory: %s", currentDir)
 
 	// Check if directory exists
-	if _, err := os.Stat(syncDirectory); os.IsNotExist(err) {
-		log.Fatalf("Sync directory does not exist: %s", syncDirectory)
+	if _, err := os.Stat(client.syncDirectory); os.IsNotExist(err) {
+		log.Fatalf("Sync directory does not exist: %s", client.syncDirectory)
 	}
 
 	// Add file system watchers at the root and in all subdirectories
-	err = filepath.WalkDir(syncDirectory, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(client.syncDirectory, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
 			err := watcher.Add(path)
 			if err != nil {
@@ -218,7 +200,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	eventProcessor.processEvents(publisher, watcher)
+	eventProcessor.processEvents(watcher)
 
 	// Block subroutines until cancel
 	sigs := make(chan os.Signal, 1)
@@ -230,7 +212,7 @@ func main() {
 	time.Sleep(1 * time.Second)
 }
 
-func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
+func watch(watcher *fsnotify.Watcher) {
 	go func() {
 		for {
 			select {
@@ -240,14 +222,9 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 				}
 
 				path := event.Name
+				oldPath := ""
 				eventOperation := event.Op.String()
 				eventString := event.String()
-
-				message := Message{
-					ClientID: clientID,
-					Event:    event.Op.String(),
-					Path:     event.Name,
-				}
 
 				if ignoreEvents.isIgnored(path) {
 					log.Printf("[WATCH]-[IGNORE EVENTS] Detected ignored, %s, for %s\n", path, eventOperation)
@@ -260,21 +237,16 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 						continue
 					}
 					log.Printf("[WATCH] Putting in write debouncer\n")
-					writeDebouncer.putWrite(path, &message)
+					writeDebouncer.putWrite(path)
 				case fsnotify.Create:
 					// if Create event was prompted from Rename event
 					if hasOldPath(eventString) {
 						log.Printf("[WATCH] -CREATE- has old path %s\n", eventString)
-						oldPath := getOldPath(eventString)
-
+						oldPath = getOldPath(eventString)
 						renameEvent := "NECO_RENAME"
-
-						message.Event = renameEvent
-						message.OldPath = oldPath
-
 						eventOperation = renameEvent
 					}
-					eventProcessor.putEvent(path, eventOperation, &message)
+					eventProcessor.putEvent(path, oldPath, eventOperation)
 				case fsnotify.Rename:
 					if writeDebouncer.writeExists(path) {
 						writeDebouncer.deleteWrite(path)
@@ -283,9 +255,9 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 					if writeDebouncer.writeExists(path) {
 						writeDebouncer.deleteWrite(path)
 					}
-					eventProcessor.putEvent(path, eventOperation, &message)
+					eventProcessor.putEvent(path, oldPath, eventOperation)
 				default:
-					eventProcessor.putEvent(path, eventOperation, &message)
+					eventProcessor.putEvent(path, oldPath, eventOperation)
 				}
 
 				log.Printf("%s\n", eventString)
@@ -300,36 +272,25 @@ func watch(watcher *fsnotify.Watcher, publisher *rmq.Publisher) {
 	}()
 }
 
-func upload(message *Message) error {
+func upload(denormalizedPath string) error {
 	log.Printf("[UPLOAD] Marking true")
 
-	fields := map[string]string{
-		"client_id": message.ClientID,
-		"event":     message.Event,
-		"path":      utils.AbsToRelConvert(syncDirectory, message.Path),
-	}
-
-	// Sending relative path, target file's path to upload, and serverURL to send req to
-	// `uploadResponse` comes unmarshalled already
-	uploadResponse, err := api.Upload(fields, message.Path, serverURL)
+	uploadResponse, err := client.apiClient.Upload(denormalizedPath, client.ID)
 	if err != nil {
 		log.Printf("[UPLOAD] Error: %s\n", err)
 	}
 
-	message.FileURL = uploadResponse.FileURL
+	log.Printf("[UPLOAD] Upload response: %+v", uploadResponse)
+
 	return nil
 }
 
-func download(message Message) error {
-	// Download has ABSOLUTE PATH REMEMBER THIS
-	absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
-	// Works for create events but not for consuming write evensts
-	// processedFiles.mark(absolutePath, message.Event, false, false)
-	// defer processedFiles.unmark(absolutePath)
-	ignoreEvents.putIgnore(absolutePath)
+func download(denormalizedPath string) error {
+	ignoreEvents.putIgnore(denormalizedPath)
 	log.Printf("[DOWNLOAD] Marked false")
 
-	err := api.Download(message.Path, syncDirectory, serverURL)
+	normalizedPath := utils.AbsToRelConvert(client.syncDirectory, denormalizedPath)
+	err := client.apiClient.Download(normalizedPath)
 	if err != nil {
 		return err
 	}
@@ -337,32 +298,6 @@ func download(message Message) error {
 	log.Printf("[DOWNLOAD] File populated")
 
 	return nil
-}
-
-func publish(publisher *rmq.Publisher, message *Message) {
-	message.Path = utils.AbsToRelConvert(syncDirectory, message.Path)
-	message.OldPath = utils.AbsToRelConvert(syncDirectory, message.OldPath)
-
-	jsonData, err := json.Marshal(message)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	publishResult, err := publisher.Publish(context.Background(), rmq.NewMessage(jsonData))
-	if err != nil {
-		log.Fatal(err)
-	}
-	rmq.Info("[PUBLISHER] SENDING MESSAGE")
-
-	// ACKs and NACKs from broker to publisher
-	switch publishResult.Outcome.(type) {
-	case *rmq.StateAccepted:
-		rmq.Info("[PUBLISHER] Message accepted", publishResult.Message.Data[0])
-	case *rmq.StateRejected:
-		rmq.Info("[PUBLISHER] Message rejected", publishResult.Message.Data[0])
-	case *rmq.StateReleased:
-		rmq.Info("[PUBLISHER] Message released", publishResult.Message.Data[0])
-	}
 }
 
 func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watcher) {
@@ -384,10 +319,8 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					continue
 				}
 
-				var message Message
+				var message api.Message
 				json.Unmarshal(deliveryContext.Message().GetData(), &message)
-				// message.Path is already normalized since it's sent from the server
-				// message.Path = utils.DenormalizePath(message.Path)
 
 				// For testing with docker containers
 				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
@@ -397,7 +330,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					message.FileURL = fmt.Sprintf("%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
 				}
 
-				if message.ClientID == clientID {
+				if message.ClientID == client.ID {
 					// Consumer discards message that it was sent from Broker
 					err = deliveryContext.Discard(context.Background(), &amqp.Error{})
 					rmq.Error("[CONSUMER] Discarded message %v", message)
@@ -408,8 +341,11 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					"[CONSUMER] received message",
 					fmt.Sprintf("%+v", message),
 				)
-				absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
-				rmq.Info("[CONSUMER DEBUG] Rel to Abs: ", absolutePath)
+
+				// Convert normalized path to denormalized (absolute) path for local file system
+				denormalizedPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
+
+				rmq.Info("[CONSUMER DEBUG] Rel to Abs: ", denormalizedPath)
 
 				err = deliveryContext.Accept(context.Background())
 				if err != nil {
@@ -421,48 +357,48 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 				case "CREATE":
 					if strings.HasSuffix(message.Path, ".md") {
 						rmq.Info("[CONSUMER] CREATE DOWNLOADING")
-						err := download(message)
+						err := download(denormalizedPath)
 						if err != nil {
 							rmq.Error("[CONSUMER] Failed to download create", err)
 							continue
 						}
 						// Consuming directory create events
 					} else {
-						absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
 						rmq.Info("[CONSUMER] CREATING DIRECTORY", message.Path)
-						ignoreEvents.putIgnore(absolutePath)
-						err := utils.MkDir(absolutePath)
+						ignoreEvents.putIgnore(denormalizedPath)
+						err := utils.MkDir(denormalizedPath)
 						if err != nil {
 							rmq.Error("[CONSUMER] Faield to create directory", err)
 						}
-						watcher.Add(absolutePath)
+						watcher.Add(denormalizedPath)
 					}
 				case "WRITE":
 					rmq.Info("[CONSUMER] WRITE DOWNLOADING")
-					err := download(message)
+					err := download(denormalizedPath)
 					if err != nil {
 						rmq.Error("[CONSUMER] Failed to download write", err)
 						continue
 					}
 				case "NECO_RENAME":
-					absoluteOldPath := utils.RelToAbsConvert(syncDirectory, message.OldPath)
-					absoluteNewPath := utils.RelToAbsConvert(syncDirectory, message.Path)
+					denormalizedOldPath := utils.RelToAbsConvert(client.syncDirectory, message.OldPath)
+					denormalizedNewPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
 
 					rmq.Info("[CONSUMER] -NECO_RENAME-")
-					ignoreEvents.putIgnore(absoluteOldPath)
-					ignoreEvents.putIgnore(absoluteNewPath)
-					err := utils.Rename(absoluteOldPath, absoluteNewPath)
+					ignoreEvents.putIgnore(denormalizedOldPath)
+					ignoreEvents.putIgnore(denormalizedNewPath)
+					err := utils.Rename(denormalizedOldPath, denormalizedNewPath)
 					if err != nil {
 						rmq.Error("[CONSUMER] -NECO_REMAKE- ", err)
+						continue
 					}
-					if utils.IsDir(absoluteOldPath) {
-						watcher.Add(absoluteNewPath)
+					if utils.IsDir(denormalizedOldPath) {
+						watcher.Add(denormalizedNewPath)
 					}
 				case "REMOVE":
 					rmq.Info("[CONSUMER] -REMOVE-")
-					absolutePath := utils.RelToAbsConvert(syncDirectory, message.Path)
-					ignoreEvents.putIgnore(absolutePath)
-					err := utils.Rm(absolutePath)
+					denormalizedPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
+					ignoreEvents.putIgnore(denormalizedPath)
+					err := utils.Rm(denormalizedPath)
 					if err != nil {
 						rmq.Error("[CONSUMER] -REMOVE- Failed to remove", err)
 					}
@@ -478,16 +414,16 @@ func NewEventProcessor() *EventProcessor {
 	}
 }
 
-func (ep EventProcessor) putEvent(path string, event string, message *Message) {
+func (ep EventProcessor) putEvent(path, oldPath, event string) {
 	ep.fileEvents <- EventData{
 		path:      path,
+		oldPath:   oldPath,
 		event:     event,
 		timestamp: time.Now(),
-		message:   message,
 	}
 }
 
-func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnotify.Watcher) {
+func (ep EventProcessor) processEvents(watcher *fsnotify.Watcher) {
 	go func() {
 		for eventData := range ep.fileEvents {
 			switch eventData.event {
@@ -497,30 +433,27 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
 					}
-					err := upload(eventData.message)
+					err := upload(eventData.path)
 					if err != nil {
 						log.Println(err)
 					}
-					// publish(publisher, eventData.message)
 				} else if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
-					api.RemoteMkdir(eventData.message.Path, syncDirectory, serverURL, clientID)
+					client.apiClient.RemoteMkdir(eventData.path, client.ID)
 					if processedFiles.isProcessed(eventData.path) {
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
 					}
-					// publish(publisher, eventData.message)
 				}
 			case "WRITE":
 				if strings.HasSuffix(eventData.path, ".md") {
 					if !ignoreEvents.isIgnored(eventData.path) {
 						log.Printf("[EVENT PROCESSOR] -WRITE- is write ready and uploading\n")
-						err := upload(eventData.message)
+						err := upload(eventData.path)
 						if err != nil {
 							log.Println(err)
 						}
 						log.Printf("[EVENT PROCESSOR] -WRITE- publishing\n")
-						publish(publisher, eventData.message)
 					} else {
 						log.Printf("[EVENT PROCESSOR]-[IGNORE EVENTS] -WRITE- is still being ignored")
 					}
@@ -532,7 +465,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 				if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
 				}
-				err := api.RemoteRename(eventData.message.OldPath, eventData.message.Path, syncDirectory, serverURL, clientID)
+				err := client.apiClient.RemoteRename(eventData.oldPath, eventData.path, client.ID)
 				if err != nil {
 					log.Println(err)
 				}
@@ -543,7 +476,7 @@ func (ep EventProcessor) processEvents(publisher *rmq.Publisher, watcher *fsnoti
 					continue
 				}
 				log.Printf("[EVENT PROCESSOR] -REMOVE- removing")
-				err := api.RemoteRemove(eventData.path, syncDirectory, serverURL, clientID)
+				err := client.apiClient.RemoteRemove(eventData.path, client.ID)
 				if err != nil {
 					log.Println(err)
 				}
@@ -623,7 +556,7 @@ func NewWriteDebouncer() *WriteDebouncer {
 	}
 }
 
-func (wd WriteDebouncer) putWrite(path string, message *Message) {
+func (wd WriteDebouncer) putWrite(path string) {
 	wd.mutex.Lock()
 	defer wd.mutex.Unlock()
 
@@ -642,7 +575,7 @@ func (wd WriteDebouncer) putWrite(path string, message *Message) {
 				wd.mutex.Unlock()
 
 				log.Printf("[WRITE DEBOUNCER] Putting in event processor\n")
-				eventProcessor.putEvent(finalEvent.path, finalEvent.event, finalEvent.message)
+				eventProcessor.putEvent(finalEvent.path, finalEvent.oldPath, finalEvent.event)
 			} else {
 				wd.mutex.Unlock()
 				log.Printf("[WRITE DEBOUNCER] Debounce fired for %s but state removed", path)
@@ -657,7 +590,6 @@ func (wd WriteDebouncer) putWrite(path string, message *Message) {
 		path:      path,
 		event:     "WRITE",
 		timestamp: time.Now(),
-		message:   message,
 	}
 }
 
@@ -729,17 +661,4 @@ func getOldPath(eventString string) string {
 	lastQuote := strings.LastIndex(oldHalf, "\"")
 
 	return oldHalf[firstQuote+1 : lastQuote]
-}
-
-// Windows shit, DONT TOUCH EWW WHAT TEH FUUUCK
-func uncursing(windowsPath string) string {
-	linuxPath := strings.ReplaceAll(windowsPath, "\\", "/")
-
-	return linuxPath
-}
-
-func cursing(linuxPath string) string {
-	windowsPath := strings.ReplaceAll(linuxPath, "/", "\\")
-
-	return windowsPath
 }

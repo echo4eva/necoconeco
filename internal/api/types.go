@@ -16,6 +16,29 @@ import (
 	"github.com/echo4eva/necoconeco/internal/utils"
 )
 
+// Message represents the common message structure used for RabbitMQ communication
+type Message struct {
+	ClientID string `json:"client_id"`
+	Event    string `json:"event"`
+	Path     string `json:"path"`
+	FileURL  string `json:"file_url"`
+	OldPath  string `json:"old_path,omitempty"`
+}
+
+// API service object for handling all API interactions
+type API struct {
+	serverURL     string
+	syncDirectory string
+}
+
+// NewAPI creates a new API client instance
+func NewAPI(serverURL, syncDirectory string) *API {
+	return &API{
+		serverURL:     serverURL,
+		syncDirectory: syncDirectory,
+	}
+}
+
 type MetadataResponse struct {
 	Response
 	*utils.DirectoryMetadata
@@ -60,21 +83,24 @@ type Response struct {
 	Status int `json:"status"`
 }
 
-func Download(relativePath, syncDirectory, serverURL string) error {
-	absolutePath := utils.RelToAbsConvert(syncDirectory, relativePath)
+// Download downloads a file from the server using a normalized (relative) path
+// and saves it to the local filesystem using a denormalized (absolute) path
+func (api *API) Download(normalizedPath string) error {
+	// Convert normalized path to denormalized (absolute) path for local file system
+	denormalizedPath := utils.RelToAbsConvert(api.syncDirectory, normalizedPath)
 
-	directory := utils.GetOnlyDir(absolutePath)
+	directory := utils.GetOnlyDir(denormalizedPath)
 	utils.MkDir(directory)
 
 	// Create file locally
-	out, err := os.Create(absolutePath)
+	out, err := os.Create(denormalizedPath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
-	// Download from file-server
-	downloadURL := fmt.Sprintf("%s/files/%s", serverURL, relativePath)
+	// Download from file-server using normalized path
+	downloadURL := fmt.Sprintf("%s/files/%s", api.serverURL, normalizedPath)
 	resp, err := http.Get(downloadURL)
 	if err != nil {
 		return err
@@ -92,8 +118,10 @@ func Download(relativePath, syncDirectory, serverURL string) error {
 	return nil
 }
 
-func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadResponse, error) {
-	file, err := os.Open(absolutePath)
+// Upload uploads a file to the server, taking a denormalized (absolute) path
+// and converting it to a normalized (relative) path for server communication
+func (api *API) Upload(denormalizedPath, clientID string) (*UploadResponse, error) {
+	file, err := os.Open(denormalizedPath)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to open file %w", err)
 	}
@@ -102,21 +130,22 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 	var requestBody bytes.Buffer
 	multiWriter := multipart.NewWriter(&requestBody)
 
-	// Possible fields could be:
-	// "path" - a relative path for others to consume
-	// "client_id" - for mq
-	// "event" - for mq
-	for field, value := range fields {
-		err = multiWriter.WriteField(field, value)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to write field %s: %w", field, err)
-		}
+	// Convert denormalized (absolute) path to normalized (relative) path for server
+	normalizedPath := utils.AbsToRelConvert(api.syncDirectory, denormalizedPath)
+
+	// Write fields to multipart writer
+	err = multiWriter.WriteField("path", normalizedPath)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write field %s: %w", "path", err)
 	}
 
-	// Debug
-	// fmt.Printf("[UPLOAD] abs: %s, rel: %s, sync: %s\n", absolutePath, utils.AbsToRelConvert(absolutePath, syncDirectory), syncDirectory)
+	err = multiWriter.WriteField("client_id", clientID)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to write field %s: %w", "client_id", err)
+	}
 
-	fileWriter, err := multiWriter.CreateFormFile("file", filepath.Base(absolutePath))
+	// Create form file for file upload
+	fileWriter, err := multiWriter.CreateFormFile("file", filepath.Base(denormalizedPath))
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create form file %w:", err)
 	}
@@ -131,7 +160,7 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 		return nil, fmt.Errorf("Failed to close multipart writer %w", err)
 	}
 
-	uploadURL := fmt.Sprintf("%s/upload", serverURL)
+	uploadURL := fmt.Sprintf("%s/upload", api.serverURL)
 	request, err := http.NewRequest("POST", uploadURL, &requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create request %w", err)
@@ -162,15 +191,18 @@ func Upload(fields map[string]string, absolutePath, serverURL string) (*UploadRe
 	return &uploadResponse, nil
 }
 
-func RemoteMkdir(directory, syncDirectory, serverURL, clientID string) error {
-	createDirectoryURL := fmt.Sprintf("%s/directory", serverURL)
+// RemoteMkdir creates a directory on the server using a denormalized (absolute) path
+// which is converted to a normalized (relative) path for server communication
+func (api *API) RemoteMkdir(denormalizedPath, clientID string) error {
+	createDirectoryURL := fmt.Sprintf("%s/directory", api.serverURL)
+
+	// Convert denormalized (absolute) path to normalized (relative) path for server
+	normalizedPath := utils.AbsToRelConvert(api.syncDirectory, denormalizedPath)
 
 	payload := CreateDirectoryRequest{
 		ClientID:  clientID,
-		Directory: utils.AbsToRelConvert(syncDirectory, directory),
+		Directory: normalizedPath,
 	}
-
-	// log.Printf("[REMOTE CREATE DIRECTORY] directory: %s payload.Directory: %s", directory, payload.Directory)
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -199,13 +231,19 @@ func RemoteMkdir(directory, syncDirectory, serverURL, clientID string) error {
 	return nil
 }
 
-func RemoteRename(oldName, newName, syncDirectory, serverURL, clientID string) error {
-	renameURL := fmt.Sprintf("%s/rename", serverURL)
+// RemoteRename renames a file/directory on the server using denormalized (absolute) paths
+// which are converted to normalized (relative) paths for server communication
+func (api *API) RemoteRename(denormalizedOldName, denormalizedNewName, clientID string) error {
+	renameURL := fmt.Sprintf("%s/rename", api.serverURL)
+
+	// Convert denormalized (absolute) paths to normalized (relative) paths for server
+	normalizedOldName := utils.AbsToRelConvert(api.syncDirectory, denormalizedOldName)
+	normalizedNewName := utils.AbsToRelConvert(api.syncDirectory, denormalizedNewName)
 
 	payload := RenameRequest{
 		ClientID: clientID,
-		OldName:  utils.AbsToRelConvert(syncDirectory, oldName),
-		NewName:  utils.AbsToRelConvert(syncDirectory, newName),
+		OldName:  normalizedOldName,
+		NewName:  normalizedNewName,
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -235,12 +273,17 @@ func RemoteRename(oldName, newName, syncDirectory, serverURL, clientID string) e
 	return nil
 }
 
-func RemoteRemove(targetPath, syncDirectory, serverURL, clientID string) error {
-	removeURL := fmt.Sprintf("%s/remove", serverURL)
+// RemoteRemove removes a file/directory on the server using a denormalized (absolute) path
+// which is converted to a normalized (relative) path for server communication
+func (api *API) RemoteRemove(denormalizedPath, clientID string) error {
+	removeURL := fmt.Sprintf("%s/remove", api.serverURL)
+
+	// Convert denormalized (absolute) path to normalized (relative) path for server
+	normalizedPath := utils.AbsToRelConvert(api.syncDirectory, denormalizedPath)
 
 	payload := RemoveRequest{
 		ClientID: clientID,
-		Path:     utils.AbsToRelConvert(syncDirectory, targetPath),
+		Path:     normalizedPath,
 	}
 
 	jsonData, err := json.Marshal(payload)

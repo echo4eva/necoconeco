@@ -38,14 +38,16 @@ var excludedDirectories = map[string]bool{
 	".trash":            true,
 }
 
-// NormalizePath converts all path separators to forward slashes for cross-platform compatibility
-func NormalizePath(path string) string {
-	return filepath.ToSlash(path)
+// FileManager service object for handling all file operations
+type FileManager struct {
+	syncDirectory string
 }
 
-// DenormalizePath converts forward slashes back to the OS-specific path separator
-func DenormalizePath(path string) string {
-	return filepath.FromSlash(path)
+// NewFileManager creates a new FileManager instance
+func NewFileManager(syncDirectory string) *FileManager {
+	return &FileManager{
+		syncDirectory: syncDirectory,
+	}
 }
 
 func isExcludedDirectory(relativePath string) bool {
@@ -87,31 +89,34 @@ type SyncActionMetadata struct {
 	Files map[string]FileActionMetadata `json:"files"`
 }
 
-func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
+// GetLocalMetadata returns metadata for all files in the sync directory
+// All paths in the returned metadata are normalized (relative) paths
+func (fm *FileManager) GetLocalMetadata() (*DirectoryMetadata, error) {
 	directoryMetadata := DirectoryMetadata{
 		Files: make(map[string]FileMetadata),
 	}
 
-	err := filepath.WalkDir(syncDirectory, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(fm.syncDirectory, func(path string, d fs.DirEntry, err error) error {
 		fileInfo, err := d.Info()
 		if err != nil {
 			log.Printf("Error getting file info")
 			return err
 		}
 		lastModified := fileInfo.ModTime().Format(TimeFormat)
-		relativePath := AbsToRelConvert(syncDirectory, path)
+		// Convert to normalized (relative) path
+		normalizedPath := AbsToRelConvert(fm.syncDirectory, path)
 
 		// Debug
-		fmt.Printf("[DEBUG] path: %s | relative path: %s\n", path, relativePath)
+		fmt.Printf("[DEBUG] path: %s | normalized path: %s\n", path, normalizedPath)
 
 		// Skip if this path is in an excluded directory
-		if isExcludedDirectory(relativePath) {
+		if isExcludedDirectory(normalizedPath) {
 			return nil
 		}
 
 		// if its a file, access its contents
 		if !d.IsDir() {
-			if strings.HasSuffix(relativePath, MarkdownExtension) {
+			if strings.HasSuffix(normalizedPath, MarkdownExtension) {
 				fileContent, err := os.ReadFile(path)
 				if err != nil {
 					fmt.Printf("Error reading file %s", path)
@@ -119,7 +124,7 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 				}
 				sum := sha256.Sum256(fileContent)
 				contentHash := hex.EncodeToString(sum[:])
-				directoryMetadata.Files[relativePath] = FileMetadata{
+				directoryMetadata.Files[normalizedPath] = FileMetadata{
 					LastModified: lastModified,
 					ContentHash:  contentHash,
 					Status:       StatusExists,
@@ -127,7 +132,7 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 				}
 			}
 		} else {
-			directoryMetadata.Files[relativePath] = FileMetadata{
+			directoryMetadata.Files[normalizedPath] = FileMetadata{
 				LastModified: lastModified,
 				Status:       StatusExists,
 				IsDirectory:  true,
@@ -142,8 +147,9 @@ func GetLocalMetadata(syncDirectory string) (*DirectoryMetadata, error) {
 	return &directoryMetadata, nil
 }
 
-func CreateDirectorySnapshot(syncDirectory string) error {
-	directoryMetadata, err := GetLocalMetadata(syncDirectory)
+// CreateDirectorySnapshot creates a snapshot of the current directory state
+func (fm *FileManager) CreateDirectorySnapshot() error {
+	directoryMetadata, err := fm.GetLocalMetadata()
 	if err != nil {
 		return err
 	}
@@ -153,12 +159,12 @@ func CreateDirectorySnapshot(syncDirectory string) error {
 		return err
 	}
 	// Make hidden directory to store snapshot if it doesn't exist already
-	err = mkHiddenNecoDir(syncDirectory)
+	err = mkHiddenNecoDir(fm.syncDirectory)
 	if err != nil {
 		return err
 	}
 	// Create the necoshot.json
-	necoShotPath := getNecoShotPath(syncDirectory)
+	necoShotPath := getNecoShotPath(fm.syncDirectory)
 	err = os.WriteFile(necoShotPath, jsonData, 0644)
 	if err != nil {
 		return err
@@ -166,8 +172,9 @@ func CreateDirectorySnapshot(syncDirectory string) error {
 	return nil
 }
 
-func GetLastSnapshot(syncDirectory string) (*DirectoryMetadata, bool, error) {
-	lastSnapshotPath := getNecoShotPath(syncDirectory)
+// GetLastSnapshot retrieves the last saved snapshot from the sync directory
+func (fm *FileManager) GetLastSnapshot() (*DirectoryMetadata, bool, error) {
+	lastSnapshotPath := getNecoShotPath(fm.syncDirectory)
 
 	// Read the json file
 	jsonData, err := os.ReadFile(lastSnapshotPath)
@@ -191,6 +198,16 @@ func GetLastSnapshot(syncDirectory string) (*DirectoryMetadata, bool, error) {
 
 func IsTrueHash(localHash, trueHash string) bool {
 	return localHash == trueHash
+}
+
+// NormalizePath converts all path separators to forward slashes for cross-platform compatibility
+func NormalizePath(path string) string {
+	return filepath.ToSlash(path)
+}
+
+// DenormalizePath converts forward slashes back to the OS-specific path separator
+func DenormalizePath(path string) string {
+	return filepath.FromSlash(path)
 }
 
 func RelToAbsConvert(syncDirectory, relativePath string) string {
