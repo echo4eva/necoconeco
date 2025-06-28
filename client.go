@@ -20,17 +20,16 @@ import (
 
 	"github.com/Azure/go-amqp"
 	"github.com/echo4eva/necoconeco/internal/api"
+	"github.com/echo4eva/necoconeco/internal/config"
 	"github.com/echo4eva/necoconeco/internal/utils"
 	"github.com/fsnotify/fsnotify"
-	"github.com/joho/godotenv"
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 )
 
 type Client struct {
-	ID            string
-	syncDirectory string
-	apiClient     *api.API
-	fileManager   *utils.FileManager
+	config      *config.Config
+	apiClient   *api.API
+	fileManager *utils.FileManager
 }
 
 // Message struct moved to internal/api package
@@ -70,7 +69,6 @@ type EventProcessor struct {
 }
 
 var (
-	serverURL      string
 	client         *Client
 	processedFiles *ProcessedFiles
 	eventProcessor *EventProcessor
@@ -79,34 +77,23 @@ var (
 )
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found, using system environment variables")
-	}
+	client = &Client{}
 
-	// Get environment variables
-	exchangeName := os.Getenv("RABBITMQ_EXCHANGE_NAME")
-	queueName := os.Getenv("RABBITMQ_QUEUE_NAME")
-	routingKey := os.Getenv("RABBITMQ_ROUTING_KEY")
-	address := os.Getenv("RABBITMQ_ADDRESS")
-	serverURL = os.Getenv("SYNC_SERVER_URL")
-
-	// Initialize client struct with environment variables
-	client = &Client{
-		ID:            os.Getenv("CLIENT_ID"),
-		syncDirectory: os.Getenv("SYNC_DIRECTORY"),
-	}
-
-	// Initialize other components
 	processedFiles = NewProcessFiles()
 	eventProcessor = NewEventProcessor()
 	writeDebouncer = NewWriteDebouncer()
 	ignoreEvents = NewIgnoreEvents()
-	client.apiClient = api.NewAPI(os.Getenv("SYNC_SERVER_URL"), client.syncDirectory)
-	client.fileManager = utils.NewFileManager(client.syncDirectory)
+
+	config, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load config: %s\n", err)
+	}
+	client.config = config
+	client.apiClient = api.NewAPI(client.config.SyncServerURL, client.config.SyncDirectory)
+	client.fileManager = utils.NewFileManager(client.config.SyncDirectory)
 
 	// Setup RabbitMQ client
-	env := rmq.NewEnvironment(address, nil)
+	env := rmq.NewEnvironment(client.config.RabbitMQAddress, nil)
 	defer env.CloseConnections(context.Background())
 
 	amqpConnection, err := env.NewConnection(context.Background())
@@ -120,7 +107,7 @@ func main() {
 	defer management.Close(context.Background())
 
 	_, err = management.DeclareExchange(context.Background(), &rmq.TopicExchangeSpecification{
-		Name:         exchangeName,
+		Name:         client.config.RabbitMQExchangeName,
 		IsAutoDelete: false,
 	})
 	if err != nil {
@@ -129,7 +116,7 @@ func main() {
 	}
 
 	_, err = management.DeclareQueue(context.Background(), &rmq.ClassicQueueSpecification{
-		Name:         queueName,
+		Name:         client.config.RabbitMQQueueName,
 		IsAutoDelete: false,
 	})
 	if err != nil {
@@ -140,7 +127,7 @@ func main() {
 	// Assume that the queue exists already
 	// Second measure, just incase the client running this did a sync.
 	// If sync, the file server put messages in their queue that are redundant.
-	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
+	purgedAmount, err := management.PurgeQueue(context.Background(), client.config.RabbitMQQueueName)
 	if err != nil {
 		log.Printf("[PURGE]-[ERROR] %s\n", err)
 		return
@@ -148,9 +135,9 @@ func main() {
 	log.Printf("PURGING %d\n", purgedAmount)
 
 	_, err = management.Bind(context.TODO(), &rmq.ExchangeToQueueBindingSpecification{
-		SourceExchange:   exchangeName,
-		DestinationQueue: queueName,
-		BindingKey:       routingKey,
+		SourceExchange:   client.config.RabbitMQExchangeName,
+		DestinationQueue: client.config.RabbitMQQueueName,
+		BindingKey:       client.config.RabbitMQRoutingKey,
 	})
 	if err != nil {
 		rmq.Error("Failed to bind queue to exchange", err)
@@ -158,7 +145,7 @@ func main() {
 	}
 
 	// Setup persistent RabbitMQ consumer
-	consumer, err := amqpConnection.NewConsumer(context.Background(), queueName, nil)
+	consumer, err := amqpConnection.NewConsumer(context.Background(), client.config.RabbitMQQueueName, nil)
 	if err != nil {
 		rmq.Error("Failed to create new consumer", err)
 		return
@@ -182,12 +169,12 @@ func main() {
 	log.Printf("Current working directory: %s", currentDir)
 
 	// Check if directory exists
-	if _, err := os.Stat(client.syncDirectory); os.IsNotExist(err) {
-		log.Fatalf("Sync directory does not exist: %s", client.syncDirectory)
+	if _, err := os.Stat(client.config.SyncDirectory); os.IsNotExist(err) {
+		log.Fatalf("Sync directory does not exist: %s", client.config.SyncDirectory)
 	}
 
 	// Add file system watchers at the root and in all subdirectories
-	err = filepath.WalkDir(client.syncDirectory, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(client.config.SyncDirectory, func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
 			err := watcher.Add(path)
 			if err != nil {
@@ -275,7 +262,7 @@ func watch(watcher *fsnotify.Watcher) {
 func upload(denormalizedPath string) error {
 	log.Printf("[UPLOAD] Marking true")
 
-	uploadResponse, err := client.apiClient.Upload(denormalizedPath, client.ID)
+	uploadResponse, err := client.apiClient.Upload(denormalizedPath, client.config.ClientID)
 	if err != nil {
 		log.Printf("[UPLOAD] Error: %s\n", err)
 	}
@@ -289,7 +276,7 @@ func download(denormalizedPath string) error {
 	ignoreEvents.putIgnore(denormalizedPath)
 	log.Printf("[DOWNLOAD] Marked false")
 
-	normalizedPath := utils.AbsToRelConvert(client.syncDirectory, denormalizedPath)
+	normalizedPath := utils.AbsToRelConvert(client.config.SyncDirectory, denormalizedPath)
 	err := client.apiClient.Download(normalizedPath)
 	if err != nil {
 		return err
@@ -323,14 +310,14 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 				json.Unmarshal(deliveryContext.Message().GetData(), &message)
 
 				// For testing with docker containers
-				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, serverURL)
-				if strings.Contains(message.FileURL, "localhost") && !strings.Contains(serverURL, "localhost") {
-					message.FileURL = fmt.Sprintf("%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
-				} else if strings.Contains(message.FileURL, "file-server") && strings.Contains(serverURL, "localhost") {
-					message.FileURL = fmt.Sprintf("%s%s", serverURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
+				log.Printf("[DEBUG] FileURL: %s serverURL: %s", message.FileURL, client.config.SyncServerURL)
+				if strings.Contains(message.FileURL, "localhost") && !strings.Contains(client.config.SyncServerURL, "localhost") {
+					message.FileURL = fmt.Sprintf("%s%s", client.config.SyncServerURL, strings.TrimPrefix(message.FileURL, "http://localhost:8080"))
+				} else if strings.Contains(message.FileURL, "file-server") && strings.Contains(client.config.SyncServerURL, "localhost") {
+					message.FileURL = fmt.Sprintf("%s%s", client.config.SyncServerURL, strings.TrimPrefix(message.FileURL, "http://file-server:8080"))
 				}
 
-				if message.ClientID == client.ID {
+				if message.ClientID == client.config.ClientID {
 					// Consumer discards message that it was sent from Broker
 					err = deliveryContext.Discard(context.Background(), &amqp.Error{})
 					rmq.Error("[CONSUMER] Discarded message %v", message)
@@ -343,7 +330,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 				)
 
 				// Convert normalized path to denormalized (absolute) path for local file system
-				denormalizedPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
+				denormalizedPath := utils.RelToAbsConvert(client.config.SyncDirectory, message.Path)
 
 				rmq.Info("[CONSUMER DEBUG] Rel to Abs: ", denormalizedPath)
 
@@ -380,8 +367,8 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 						continue
 					}
 				case "NECO_RENAME":
-					denormalizedOldPath := utils.RelToAbsConvert(client.syncDirectory, message.OldPath)
-					denormalizedNewPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
+					denormalizedOldPath := utils.RelToAbsConvert(client.config.SyncDirectory, message.OldPath)
+					denormalizedNewPath := utils.RelToAbsConvert(client.config.SyncDirectory, message.Path)
 
 					rmq.Info("[CONSUMER] -NECO_RENAME-")
 					ignoreEvents.putIgnore(denormalizedOldPath)
@@ -396,7 +383,7 @@ func consume(consumer *rmq.Consumer, ctx context.Context, watcher *fsnotify.Watc
 					}
 				case "REMOVE":
 					rmq.Info("[CONSUMER] -REMOVE-")
-					denormalizedPath := utils.RelToAbsConvert(client.syncDirectory, message.Path)
+					denormalizedPath := utils.RelToAbsConvert(client.config.SyncDirectory, message.Path)
 					ignoreEvents.putIgnore(denormalizedPath)
 					err := utils.Rm(denormalizedPath)
 					if err != nil {
@@ -439,7 +426,7 @@ func (ep EventProcessor) processEvents(watcher *fsnotify.Watcher) {
 					}
 				} else if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
-					client.apiClient.RemoteMkdir(eventData.path, client.ID)
+					client.apiClient.RemoteMkdir(eventData.path, client.config.ClientID)
 					if processedFiles.isProcessed(eventData.path) {
 						log.Printf("File %s has already been processed for event %s", eventData.path, eventData.event)
 						continue
@@ -465,7 +452,7 @@ func (ep EventProcessor) processEvents(watcher *fsnotify.Watcher) {
 				if utils.IsDir(eventData.path) {
 					watcher.Add(eventData.path)
 				}
-				err := client.apiClient.RemoteRename(eventData.oldPath, eventData.path, client.ID)
+				err := client.apiClient.RemoteRename(eventData.oldPath, eventData.path, client.config.ClientID)
 				if err != nil {
 					log.Println(err)
 				}
@@ -476,7 +463,7 @@ func (ep EventProcessor) processEvents(watcher *fsnotify.Watcher) {
 					continue
 				}
 				log.Printf("[EVENT PROCESSOR] -REMOVE- removing")
-				err := client.apiClient.RemoteRemove(eventData.path, client.ID)
+				err := client.apiClient.RemoteRemove(eventData.path, client.config.ClientID)
 				if err != nil {
 					log.Println(err)
 				}

@@ -1,0 +1,10 @@
+{
+  "client_id": "unique-client-identifier",
+  "rabbitmq_address": "amqp://user:password@host:port/",
+  "rabbitmq_exchange_name": "your-exchange-name",
+  "rabbitmq_queue_name": "your-queue-name (optional, for clients)",
+  "rabbitmq_routing_key": "your-routing-key",
+  "sync_directory": "/path/to/your/sync/folder",
+  "sync_server_url": "http://localhost:8080 (optional, for clients)",
+  "port": "8080 (optional, for server)"
+}

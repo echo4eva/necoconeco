@@ -12,44 +12,33 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/echo4eva/necoconeco/internal/api"
+	"github.com/echo4eva/necoconeco/internal/config"
 	"github.com/echo4eva/necoconeco/internal/utils"
-	"github.com/joho/godotenv"
 	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 )
 
 var (
-	clientID      string
-	address       string
-	queueName     string
-	serverURL     string
-	syncDirectory string
-	apiClient     *api.API
-	fileManager   *utils.FileManager
+	clientConfig *config.Config
+	apiClient    *api.API
+	fileManager  *utils.FileManager
 )
 
 func main() {
-	err := godotenv.Load()
+	// Initialize service objects
+	initConfig, err := config.LoadConfig()
+	clientConfig = initConfig
 	if err != nil {
-		log.Printf("No environment variables found, %s\n", err)
+		log.Fatalf("Failed to load config: %s\n", err)
 	}
 
-	log.Printf("Starting sync client\n")
-
-	clientID = os.Getenv("CLIENT_ID")
-	address = os.Getenv("RABBITMQ_ADDRESS")
-	queueName = os.Getenv("RABBITMQ_QUEUE_NAME")
-	serverURL = os.Getenv("SYNC_SERVER_URL")
-	syncDirectory = os.Getenv("SYNC_DIRECTORY")
-
-	// Initialize service objects
-	apiClient = api.NewAPI(serverURL, syncDirectory)
-	fileManager = utils.NewFileManager(syncDirectory)
+	log.Printf("Client config: %+v\n", clientConfig)
+	apiClient = api.NewAPI(clientConfig.SyncServerURL, clientConfig.SyncDirectory)
+	fileManager = utils.NewFileManager(clientConfig.SyncDirectory)
 
 	// Setup RabbitMQ client
-	env := rmq.NewEnvironment(address, nil)
+	env := rmq.NewEnvironment(clientConfig.RabbitMQAddress, nil)
 	defer env.CloseConnections(context.Background())
 
 	amqpConnection, err := env.NewConnection(context.Background())
@@ -64,7 +53,7 @@ func main() {
 
 	// Declaring queue just in case the client's queue doesn't exist
 	_, err = management.DeclareQueue(context.Background(), &rmq.ClassicQueueSpecification{
-		Name:         queueName,
+		Name:         clientConfig.RabbitMQQueueName,
 		IsAutoDelete: false,
 	})
 	if err != nil {
@@ -73,7 +62,7 @@ func main() {
 	}
 
 	// Assume that the queue exists already
-	purgedAmount, err := management.PurgeQueue(context.Background(), queueName)
+	purgedAmount, err := management.PurgeQueue(context.Background(), clientConfig.RabbitMQQueueName)
 	if err != nil {
 		log.Printf("[SYNC]-[PURGE]-[ERROR] %s\n", err)
 		return
@@ -148,11 +137,11 @@ func processSnapshots(lastSnapshot, currentSnapshot *utils.DirectoryMetadata) *u
 
 func postSnapshot(finalSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMetadata, error) {
 	log.Println("Posting snapshot to server")
-	postURL := fmt.Sprintf("%s/snapshot", serverURL)
+	postURL := fmt.Sprintf("%s/snapshot", clientConfig.SyncServerURL)
 	log.Printf("Final snapshot to be sent to server: %+v\n", finalSnapshot)
 
 	payload := api.PostSnapshotRequest{
-		ClientID:      clientID,
+		ClientID:      clientConfig.ClientID,
 		FinalSnapshot: finalSnapshot,
 	}
 
@@ -206,9 +195,9 @@ func processActions(syncActionMetadata *utils.SyncActionMetadata) {
 		case utils.ActionUpload:
 			// Upload file to server using denormalized (absolute) path
 			// The API client will handle path conversion internally
-			denormalizedPath := utils.RelToAbsConvert(syncDirectory, normalizedPath)
+			denormalizedPath := utils.RelToAbsConvert(clientConfig.SyncDirectory, normalizedPath)
 
-			uploadResponse, err := apiClient.Upload(denormalizedPath, clientID)
+			uploadResponse, err := apiClient.Upload(denormalizedPath, clientConfig.ClientID)
 			if err != nil {
 				log.Printf("Failed to upload %s: %s", normalizedPath, err)
 			} else {
@@ -226,7 +215,7 @@ func processActions(syncActionMetadata *utils.SyncActionMetadata) {
 			}
 		case utils.ActionMkdir:
 			// Create directory locally using denormalized (absolute) path
-			denormalizedPath := utils.RelToAbsConvert(syncDirectory, normalizedPath)
+			denormalizedPath := utils.RelToAbsConvert(clientConfig.SyncDirectory, normalizedPath)
 			err := utils.MkDir(denormalizedPath)
 			if err != nil {
 				log.Printf("Failed to create directory %s: %s", normalizedPath, err)

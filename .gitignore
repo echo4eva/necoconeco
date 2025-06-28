@@ -21,8 +21,9 @@
 go.work
 go.work.sum
 
-# env file
+# config files
 .env
+config.json
 
 # docker compose files
-docker-compose.prod.yaml
+docker-compose.prod.yml
