@@ -4,7 +4,7 @@
   "rabbitmq_exchange_name": "your-exchange-name",
   "rabbitmq_queue_name": "your-queue-name (optional, for clients)",
   "rabbitmq_routing_key": "your-routing-key",
-  "sync_directory": "/path/to/your/sync/folder",
+  "sync_directory": "/path/to/your/sync/folder OR C:\\path\\to\\your\\sync\\folder (double backslash for windows)",
   "sync_server_url": "http://localhost:8080 (optional, for clients)",
   "port": "8080 (optional, for server)"
 }
