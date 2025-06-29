@@ -1,12 +1,15 @@
 #!/bin/bash
-# This script runs the necoconeco client applications.
 
-# Get the directory where the script is located, so it can find the executables.
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "Starting one-time sync..."
-./necoconeco-clientsync
+# Change to script directory
+cd "$SCRIPT_DIR"
 
-echo "Starting real-time sync client..."
-./necoconeco-client
+echo "Starting necoconeco sync..."
+./necoconeco-clientsync &
+
+echo "Starting necoconeco client..."
+./necoconeco-client &
+
+echo "Necoconeco started successfully!"

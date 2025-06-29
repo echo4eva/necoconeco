@@ -43,8 +43,8 @@ jobs:
           mv necoconeco-client.exe necoconeco-clientsync.exe windows-release/
           cp config.example.json windows-release/config.json
           cp scripts/release/run.bat windows-release/
-          cp scripts/release/install-startup.bat windows-release/
-          cp scripts/release/uninstall-startup.bat windows-release/
+          cp scripts/release/install.bat windows-release/
+          cp scripts/release/uninstall.bat windows-release/
           zip -r windows-release.zip windows-release
 
       - name: Create Linux Release Package
