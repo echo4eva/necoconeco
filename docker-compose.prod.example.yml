@@ -1,8 +1,6 @@
 services:
   rabbitmq:
     image: rabbitmq:4.0-management
-    hostname: obsidian-sync
-    container_name: obsidian-sync
     restart: unless-stopped
     ports:
       - "5672:5672"
@@ -18,7 +16,6 @@ services:
       start_period: 10s
   file-server:
     image: cookyves/necoconeco-server:latest
-    container_name: file-server
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     restart: unless-stopped
@@ -39,7 +36,6 @@ services:
       - PORT=8080
   watchtower:
     image: containrrr/watchtower
-    container_name: watchtower-prod
     restart: unless-stopped
     volumes:
       # Watchtower needs this to interact with the Docker daemon on your VPS

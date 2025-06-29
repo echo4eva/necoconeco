@@ -1,25 +1,22 @@
 services:
   rabbitmq:
     image: rabbitmq:4.0-management
-    hostname: obsidian-sync
-    container_name: obsidian-sync
     ports:
       - "5672:5672"
       - "15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
-      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./rabbitmq.dev.conf:/etc/rabbitmq/rabbitmq.conf
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 5s
       timeout: 10s
       retries: 5
       start_period: 10s
-  container-1:
+  client:
     build:
-      context: .
+      context: ..
       dockerfile: integration_test/client.Dockerfile
-    container_name: container-1
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -33,9 +30,8 @@ services:
       - SYNC_SERVER_URL=http://file-server:8080
   file-server:
     build:
-      context: .
+      context: ..
       dockerfile: integration_test/server.Dockerfile
-    container_name: file-server
     ports:
       - "8080:8080"
     depends_on:
@@ -47,5 +43,6 @@ services:
       - RABBITMQ_ADDRESS=amqp://kappa:chungus@rabbitmq:5672/
       - RABBITMQ_EXCHANGE_NAME=neco
       - RABBITMQ_ROUTING_KEY=kappa.penis
+      - PORT=8080
 volumes:
   rabbitmq-data:
