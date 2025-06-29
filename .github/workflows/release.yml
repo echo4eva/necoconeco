@@ -61,6 +61,8 @@ jobs:
       - name: Create Server Release Package
         run: |
           mkdir server-release
+          cp docker-compose.prod.example.yml server-release/docker-compose.yml
+          cp rabbitmq.conf server-release/rabbitmq.conf
           mv necoconeco-server server-release/
           tar -czvf server-release.tar.gz server-release
 

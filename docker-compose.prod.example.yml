@@ -28,8 +28,8 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      - ./storage:/app/storage
-    # use this or env 
+      - ./storage:/app/storage 
+    # use this or .env file
     environment:
       - CLIENT_ID=server-pub
       - SYNC_DIRECTORY=/app/storage
