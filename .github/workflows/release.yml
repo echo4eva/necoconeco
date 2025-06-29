@@ -1,0 +1,74 @@
+name: Create Necoconeco Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Go environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.8'
+
+      - name: Tidy Go modules
+        run: go mod tidy
+
+      # --- Build All Artifacts ---
+      - name: Build Windows Client
+        run: |
+          GOOS=windows GOARCH=amd64 go build -o necoconeco-client.exe -tags client .
+          GOOS=windows GOARCH=amd64 go build -o necoconeco-clientsync.exe -tags clientsync .
+      
+      - name: Build Linux Client
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o necoconeco-client -tags client .
+          GOOS=linux GOARCH=amd64 go build -o necoconeco-clientsync -tags clientsync .
+      
+      - name: Build Server
+        run: GOOS=linux GOARCH=amd64 go build -o necoconeco-server -tags server .
+
+      # --- Package for Release ---
+      - name: Create Windows Release Package
+        run: |
+          mkdir windows-release
+          mv necoconeco-client.exe necoconeco-clientsync.exe windows-release/
+          cp config.example.json windows-release/config.json
+          cp scripts/release/run.bat windows-release/
+          cp scripts/release/install-startup.bat windows-release/
+          cp scripts/release/uninstall-startup.bat windows-release/
+          zip -r windows-release.zip windows-release
+
+      - name: Create Linux Release Package
+        run: |
+          mkdir linux-release
+          mv necoconeco-client necoconeco-clientsync linux-release/
+          cp config.example.json linux-release/config.json
+          cp scripts/release/run.sh linux-release/
+          cp scripts/release/install.sh linux-release/
+          cp scripts/release/uninstall.sh linux-release/
+          chmod +x linux-release/*.sh
+          tar -czvf linux-release.tar.gz linux-release
+
+      - name: Create Server Release Package
+        run: |
+          mkdir server-release
+          mv necoconeco-server server-release/
+          tar -czvf server-release.tar.gz server-release
+
+      # --- Create and Upload to GitHub Release ---
+      - name: Create GitHub Release with Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          files: |
+            windows-release.zip
+            linux-release.tar.gz
+            server-release.tar.gz
