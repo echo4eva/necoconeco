@@ -1,8 +1,10 @@
 # Necoconeco
 
-Necoconeco is a distributed file synchronization system for markdown files, using RabbitMQ for real-time messaging and HTTP for file operations. The system consists of a file server and multiple clients that can sync files in real-time.
+Necoconeco is a distributed file synchronization system for markdown files inspired by Obsidian Sync, using RabbitMQ for real-time messaging and HTTP for file operations. The system consists of a file server and multiple clients that can sync and modify files in real-time.
 
-## Build and Development Commands
+This project was developed as an educational vehicle to explore distributed systems, concurrency, and message queues. This tool is not intended for production use.
+
+## Build, Setup, and Development Commands
 
 ### Building the Applications
 
@@ -17,6 +19,27 @@ go build -tags client -o client client.go
 go build -tags clientsync -o clientsync clientsync.go
 ```
 
+### Production Setup
+
+1. **Server**
+```bash
+curl -L https://github.com/echo4eva/necoconeco/releases/download/server-release.tar.gz
+tar -xzvf server-release.tar.gz
+cd server-release
+# NOTE: edit/create .env, rabbitmq.conf, or docker-compose.yml 
+docker compose up
+```
+
+2. **Client**:
+   Startup and run scripts for both operating systems are included
+```bash
+curl -L https://github.com/echo4eva/necoconeco/releases/download/linux-release.tar.gz
+tar -xzvf linux-release.tar.gz
+cd linux-release
+# NOTE: edit config.json
+sh run.sh
+```
+
 ### Running Tests
 
 ```bash
@@ -28,11 +51,7 @@ go test ./integration_test/... -v
 
 ```bash
 # Start with Docker Compose for development
-docker-compose -f docker-compose.prod.yml up
-
-# Or use manual startup scripts
-./scripts/start.sh    # Unix/Linux/macOS
-./scripts/start.bat   # Windows
+docker-compose -f ./integration_test/docker-compose.dev.yml
 ```
 
 ## Architecture Overview
@@ -60,6 +79,7 @@ docker-compose -f docker-compose.prod.yml up
 
 - `internal/api/`: HTTP API client and request/response types
 - `internal/utils/`: File operations, metadata handling, and utility functions
+- `internal/config/`: Used to load .env or config
 - `integration_test/`: Comprehensive integration tests using testcontainers
 
 ### Synchronization Logic
@@ -68,7 +88,7 @@ The system uses a Last-Write-Wins (LWW) conflict resolution strategy with tombst
 
 ### Environment Configuration
 
-Required environment variables (usually in `.env` file):
+Required environment variables (config.json or .env):
 
 - `CLIENT_ID`: Unique identifier for each client
 - `SYNC_DIRECTORY`: Local directory to sync
