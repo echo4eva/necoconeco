@@ -1,6 +1,8 @@
+![necoconeco](assets/necoconeco.jpg)
+
 # Necoconeco
 
-Necoconeco is a distributed file synchronization system for markdown files inspired by Obsidian Sync, using RabbitMQ for real-time messaging and HTTP for file operations. The system consists of a file server and multiple clients that can sync and modify files in real-time.
+Necoconeco is a distributed file synchronization system for markdown files inspired by Obsidian Sync. It uses RabbitMQ for real-time messaging and HTTP for file operations. The system consists of a file server and multiple clients that can sync files and modifications in real-time.
 
 This project was developed as an educational vehicle to explore distributed systems, concurrency, and message queues. This tool is not intended for production use.
 
@@ -57,6 +59,8 @@ docker-compose -f ./integration_test/docker-compose.dev.yml
 ## Architecture Overview
 
 ### Core Components
+
+![uml](assets/uml.png)
 
 1. **Server (`server.go`)**: Central file server that handles HTTP API requests and publishes events to RabbitMQ
    - Serves files via HTTP file server
