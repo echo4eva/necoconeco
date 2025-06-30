@@ -58,9 +58,9 @@ docker-compose -f ./integration_test/docker-compose.dev.yml
 
 ## Architecture Overview
 
-### Core Components
-
 ![uml](assets/uml.png)
+
+### Core Components
 
 1. **Server (`server.go`)**: Central file server that handles HTTP API requests and publishes events to RabbitMQ
    - Serves files via HTTP file server
