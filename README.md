@@ -6,6 +6,8 @@ Necoconeco is a distributed file synchronization system for markdown files inspi
 
 This project was developed as an educational vehicle to explore distributed systems, concurrency, and message queues. This tool is not intended for production use.
 
+[Demo on twitter!](https://x.com/echo4eva/status/1937030751016677838)
+
 ## Build, Setup, and Development Commands
 
 ### Building the Applications
