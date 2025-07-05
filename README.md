@@ -14,7 +14,7 @@ This project was developed as an educational vehicle to explore distributed syst
 # Build server (requires 'server' build tag)
 go build -tags server -o server server.go
 
-# Build client (requires 'client' build tag)  
+# Build client (requires 'client' build tag)
 go build -tags client -o client client.go
 
 # Build sync client (requires 'clientsync' build tag)
@@ -25,17 +25,17 @@ go build -tags clientsync -o clientsync clientsync.go
 
 1. **Server**
 ```bash
-curl -L https://github.com/echo4eva/necoconeco/releases/download/server-release.tar.gz
+curl -LO https://github.com/echo4eva/necoconeco/releases/download/v1.0.1/server-release.tar.gz
 tar -xzvf server-release.tar.gz
 cd server-release
-# NOTE: edit/create .env, rabbitmq.conf, or docker-compose.yml 
+# NOTE: edit/create .env, rabbitmq.conf, or docker-compose.yml
 docker compose up
 ```
 
 2. **Client**:
    Startup and run scripts for both operating systems are included
 ```bash
-curl -L https://github.com/echo4eva/necoconeco/releases/download/linux-release.tar.gz
+curl -LO https://github.com/echo4eva/necoconeco/releases/download/v1.0.1/linux-release.tar.gz
 tar -xzvf linux-release.tar.gz
 cd linux-release
 # NOTE: edit config.json
