@@ -172,6 +172,10 @@ func postSnapshot(finalSnapshot *utils.DirectoryMetadata) (*utils.SyncActionMeta
 		return nil, err
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
 	var response api.PostSnapshotResponse
 	if err := json.Unmarshal(bodyBytes, &response); err != nil {
 		log.Printf("Failed to unmarshal response: %s", err)

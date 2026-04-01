@@ -50,7 +50,7 @@ type PostSnapshotResponse struct {
 }
 
 type PostSnapshotRequest struct {
-	ClientID      string                   `json"client_id"`
+	ClientID      string                   `json:"client_id"`
 	FinalSnapshot *utils.DirectoryMetadata `json:"final_snapshot"`
 }
 
