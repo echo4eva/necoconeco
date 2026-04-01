@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -69,6 +70,8 @@ func LoadConfig() (*Config, error) {
 	if val := os.Getenv("PORT"); val != "" {
 		config.Port = val
 	}
+
+	config.SyncServerURL = strings.TrimRight(config.SyncServerURL, "/")
 
 	return config, nil
 }
